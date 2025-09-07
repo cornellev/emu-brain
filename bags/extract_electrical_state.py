@@ -1,0 +1,51 @@
+import sqlite3
+import pandas as pd
+import rclpy
+from rosidl_runtime_py.utilities import get_message
+from rclpy.serialization import deserialize_message
+import os
+
+def main():
+    rclpy.init()
+
+    # assumes bag file is in same directory
+    db_path = "test1/test1_0.db3"
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f"Bag file {db_path} not found in this directory.")
+
+    conn = sqlite3.connect(db_path)
+
+    # Load topics
+    topics = pd.read_sql_query("SELECT id, name, type FROM topics", conn)
+    topic_info = topics[topics["name"] == "/electrical_state"].iloc[0]
+    topic_id, topic_type = topic_info["id"], topic_info["type"]
+
+    if topic_type != "serial_com/msg/ElectricalState":
+        raise ValueError(f"Topic /electrical_state has type {topic_type}, expected serial_com/msg/ElectricalState")
+
+    # Load all messages for this topic
+    query = f"SELECT timestamp, data FROM messages WHERE topic_id={topic_id}"
+    messages = pd.read_sql_query(query, conn)
+
+    # Prepare message type
+    msg_type = get_message(topic_type)
+
+    rows = []
+    for _, msg in messages.iterrows():
+        deserialized = deserialize_message(msg["data"], msg_type)
+
+        ros_time_sec = deserialized.header.stamp.sec + deserialized.header.stamp.nanosec * 1e-9
+
+        rows.append({
+            "ros_time_sec": ros_time_sec,
+            "frame_id": deserialized.header.frame_id,
+            "voltage": deserialized.voltage,
+            "current": deserialized.current,
+        })
+
+    df = pd.DataFrame(rows)
+    df.to_csv("electrical_state.csv", index=False)
+    print(f"Saved {len(df)} messages to electrical_state.csv")
+
+if __name__ == "__main__":
+    main()
