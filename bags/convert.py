@@ -4,14 +4,20 @@ import rclpy
 from rosidl_runtime_py.utilities import get_message
 from rclpy.serialization import deserialize_message
 import os
+import sys
 
 def main():
     rclpy.init()
 
-    # assumes bag file is in same directory
-    db_path = "test1/test1_0.db3"
+    if len(sys.argv) < 3:
+        print("Usage: python3 extract_electrical_state.py <path_to_db3> <output_csv>")
+        sys.exit(1)
+
+    db_path = sys.argv[1]
+    output_csv = sys.argv[2]
+
     if not os.path.exists(db_path):
-        raise FileNotFoundError(f"Bag file {db_path} not found in this directory.")
+        raise FileNotFoundError(f"Bag file {db_path} not found.")
 
     conn = sqlite3.connect(db_path)
 
@@ -44,8 +50,8 @@ def main():
         })
 
     df = pd.DataFrame(rows)
-    df.to_csv("electrical_state.csv", index=False)
-    print(f"Saved {len(df)} messages to electrical_state.csv")
+    df.to_csv(output_csv, index=False)
+    print(f"Saved {len(df)} messages to {output_csv}")
 
 if __name__ == "__main__":
     main()
