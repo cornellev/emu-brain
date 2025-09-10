@@ -33,7 +33,7 @@ class SerialNode : public rclcpp::Node {
             rc_movement_sub_ = this->create_subscription<ackermann_msgs::msg::AckermannDrive>("rc_msg", 1, std::bind(&SerialNode::rcMovementCallback, this, std::placeholders::_1));
             serial_pub_ = this->create_publisher<std_msgs::msg::String>("serial_msg", 1);
             electrical_pub_ = this->create_publisher<serial_com::msg::ElectricalState>("electrical_state", 1);
-            timer_ = this->create_wall_timer(std::chrono::milliseconds(100), std::bind(&SerialNode::timer_callback, this));
+            timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&SerialNode::timer_callback, this));
         }
 
     private:
@@ -43,6 +43,7 @@ class SerialNode : public rclcpp::Node {
         // Data to publish to arduino
         float steering_angle_;
         float velocity_ = 0;
+        int64_t prev_nano = 0;
 
         // Parsed serial data from arduino
         int32_t reported_timestamp;
@@ -110,8 +111,11 @@ class SerialNode : public rclcpp::Node {
             message.data = msg;
             
             auto test = serial_com::msg::ElectricalState();
-            test.header.stamp = this->now();  // Get the current time
-            test.voltage = 48.0f;
+            int64_t current_nano = this->now().nanoseconds();
+            test.header.stamp = this->now(); 
+            test.rate = 1e9 / static_cast<float>(current_nano - prev_nano);
+            test.voltage = std::stod(msg);
+            prev_nano = current_nano;
 
             serial_pub_->publish(message);
             electrical_pub_->publish(test);
