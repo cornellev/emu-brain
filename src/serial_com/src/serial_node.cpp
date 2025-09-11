@@ -7,6 +7,9 @@
 #include "serial_com/msg/electrical_state.hpp"
 #include "builtin_interfaces/msg/time.hpp"
 #include <iostream>
+#include <regex>
+#include <string>
+#include <stdexcept>
 
 class SerialNode : public rclcpp::Node {
     public:
@@ -107,18 +110,33 @@ class SerialNode : public rclcpp::Node {
 
         // Function to publish sensor data
         void publishSerial(const std::string & msg) {
-            auto message = std_msgs::msg::String();
-            message.data = msg;
-            
-            auto test = serial_com::msg::ElectricalState();
-            int64_t current_nano = this->now().nanoseconds();
-            test.header.stamp = this->now(); 
-            test.rate = 1e9 / static_cast<float>(current_nano - prev_nano);
-            test.voltage = std::stod(msg);
-            prev_nano = current_nano;
+            // Create a string stream from the input message
+            std::istringstream stream(msg);
 
-            serial_pub_->publish(message);
-            electrical_pub_->publish(test);
+            // Declare variables to hold the two values
+            double voltage = 0.0;
+            double current = 0.0;
+
+            // Try to extract the two floats
+            if (stream >> voltage >> current) {
+                // Create message objects
+                auto message = std_msgs::msg::String();
+                message.data = msg;
+
+                auto test = serial_com::msg::ElectricalState();
+                int64_t current_nano = this->now().nanoseconds();
+                test.header.stamp = this->now();
+                test.rate = 1e9 / static_cast<float>(current_nano - prev_nano);
+                test.voltage = voltage;   // Set the voltage
+                test.current = current;   // Set the current
+                prev_nano = current_nano;
+
+                // Publish the messages
+                serial_pub_->publish(message);
+                electrical_pub_->publish(test);
+            } else {
+                std::cerr << "Invalid message format: " << msg << std::endl;
+            }
         }
 };
 
