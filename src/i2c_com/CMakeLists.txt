@@ -8,18 +8,39 @@ endif()
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+set(msg_files
+  "msg/StrainGauge.msg"
+)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  ${msg_files}
+  DEPENDENCIES std_msgs
+)
 
 # This includes the necessary I2C headers
 include_directories(SYSTEM /usr/include)
 
-add_executable(i2c_com src/i2c_com.cpp)
-ament_target_dependencies(i2c_com rclcpp std_msgs)
+add_executable(i2c_node src/i2c_node.cpp)
+ament_target_dependencies(i2c_node rclcpp std_msgs)
+
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+target_link_libraries(i2c_node ${cpp_typesupport_target})
+ament_export_dependencies(rosidl_default_runtime)
 
 # Install the node executable and other resources
 install(TARGETS
-  i2c_com
+  i2c_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Add dependencies for the ROS2 package
+install(DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
+)
+
+install(DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 ament_package()

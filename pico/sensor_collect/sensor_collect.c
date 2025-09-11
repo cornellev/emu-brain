@@ -5,107 +5,89 @@
 #include "hardware/uart.h"
 #include "pico/binary_info.h"
 
-// SPI Defines
-#define SPI_PORT spi0
-#define PIN_MISO 16
-#define PIN_CS   17
-#define PIN_SCK  18
-#define PIN_MOSI 19
+#define PI_PORT i2c0
+#define PI_SDA 0
+#define PI_SCL 1
+#define PICO_ADDR 0x42
 
-// I2C defines
-// This example will use I2C0 on GPIO8 (SDA) and GPIO9 (SCL) running at 400KHz.
-#define I2C_PORT i2c0
-#define I2C_SDA 8
-#define I2C_SCL 9
-#define ADS1115_ADDR 0x48 
+#define ADC_PORT i2c1
+#define ADC_SDA 2
+#define ADC_SCL 3
+
+#define ADC1_ADDR 0x48 
+#define ADC2_ADDR 0x49 
+const int8_t inputs[] = {0xC3, 0xD3, 0xE3, 0xF3};
+
 #define REG_CONVERSION 0x00
 #define REG_CONFIG     0x01
-
-// UART defines
-#define UART_ID uart0
-#define BAUD_RATE 115200
-#define UART_TX_PIN 0
-#define UART_RX_PIN 1
 
 void initialize() {
     stdio_init_all();
 
-    // SPI initialisation. This example will use SPI at 1MHz.
-    spi_init(SPI_PORT, 1000*1000);
-    gpio_set_function(PIN_MISO, GPIO_FUNC_SPI);
-    gpio_set_function(PIN_CS,   GPIO_FUNC_SIO);
-    gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI);
-    gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
-    
-    // Chip select is active-low, so we'll initialise it to a driven-high state
-    gpio_set_dir(PIN_CS, GPIO_OUT);
-    gpio_put(PIN_CS, 1);
-
     // I2C Initialisation. Using it at 400Khz.
-    i2c_init(I2C_PORT, 400*1000);
-    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
-    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
-    gpio_pull_up(I2C_SDA);
-    gpio_pull_up(I2C_SCL);
+    i2c_init(PI_PORT, 400*1000);
+    gpio_set_function(PI_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(PI_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(PI_SDA);
+    gpio_pull_up(PI_SCL);
+    i2c_set_slave_mode(PI_PORT, true, PICO_ADDR);
 
-    // Set up our UART
-    uart_init(UART_ID, BAUD_RATE);
-    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
-    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+    i2c_init(ADC_PORT, 400*1000);
+    gpio_set_function(ADC_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(ADC_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(ADC_SDA);
+    gpio_pull_up(ADC_SCL);
 }
 
-void ads1115_start_conversion() {
+int16_t adc_read(uint8_t addr, uint8_t input) {
     uint8_t config_data[3];
-
     config_data[0] = REG_CONFIG;
-
-    // 0xC3E3 = single-shot, AIN0, ±4.096V, 860SPS
-    config_data[1] = 0xC3;
+    config_data[1] = input;
     config_data[2] = 0xE3;
 
-    i2c_write_blocking(I2C_PORT, ADS1115_ADDR, config_data, 3, false);
-}
+    i2c_write_blocking(ADC_PORT, addr, config_data, 3, false);
 
-int16_t ads1115_read_conversion() {
+    sleep_ms(2);  // Wait for conversion (860 SPS = ~1.2ms)
+
     uint8_t reg = REG_CONVERSION;
     uint8_t buffer[2];
 
-    i2c_write_blocking(I2C_PORT, ADS1115_ADDR, &reg, 1, true);
-    i2c_read_blocking(I2C_PORT, ADS1115_ADDR, buffer, 2, false);
+    i2c_write_blocking(ADC_PORT, addr, &reg, 1, true);
+    i2c_read_blocking(ADC_PORT, addr, buffer, 2, false);
 
     return (int16_t)((buffer[0] << 8) | buffer[1]);
-}
-
-void uart_print_voltage(int16_t raw) {
-    float voltage = (raw * 4.096f) / 32768.0f;
-
-    char buf[64];
-    // snprintf(buf, sizeof(buf), "Raw ADC: %d, Voltage: %.4f V\r\n", raw, voltage);
-    snprintf(buf, sizeof(buf), "Raw ADC: %d, Voltage: %.4f V\r\n", raw, voltage);
-    uart_puts(UART_ID, buf);
-}
-
-void print_float(float raw) {
-    float voltage = (raw * 4.096f) / 32768.0f;
-    char buffer[32];  
-    sprintf(buffer, "%f\n", voltage); 
-    uart_puts(UART_ID, buffer);  
 }
 
 int main()
 {
     initialize();
 
-    uint8_t reg = 0x00;
-    uint8_t data;
+    uint8_t buf[12];  // store incoming data
     
     while (true) {
-        ads1115_start_conversion();
-        sleep_ms(2);  // Wait for conversion (860 SPS = ~1.2ms)
-        int16_t raw = ads1115_read_conversion();
+        int16_t raw_values[6];
+        raw_values[0] = adc_read(ADC1_ADDR, inputs[0]);
+        raw_values[1] = adc_read(ADC1_ADDR, inputs[1]);
+        // raw_values[2] = adc_read(ADC1_ADDR, inputs[2]);
+        // raw_values[3] = adc_read(ADC1_ADDR, inputs[3]);
+        // raw_values[4] = adc_read(ADC2_ADDR, inputs[0]);
+        // raw_values[5] = adc_read(ADC2_ADDR, inputs[1]);
 
-        // uart_print_voltage(raw);
-        print_float(raw);
-        sleep_us(200);
+        // for (int i = 0; i < 6; i++) {
+        //     buf[i*2] = (raw_values[i] >> 8) & 0xFF;  // High byte
+        //     buf[i*2+1] = raw_values[i] & 0xFF;         // Low byte
+        // }
+        
+        if (i2c_read_blocking(PI_PORT, PICO_ADDR, buf, 4, false)) {
+            // Pack raw1 and raw2 into the buffer (4 bytes)
+            buf[0] = (raw_values[0] >> 8) & 0xFF;  // raw1 High byte
+            buf[1] = raw_values[0] & 0xFF;         // raw1 Low byte
+            buf[2] = (raw_values[1] >> 8) & 0xFF;  // raw2 High byte
+            buf[3] = raw_values[1] & 0xFF;         // raw2 Low byte
+
+            // buf[0] = (raw2 >> 8) & 0xFF; // High byte
+            // buf[1] = raw2 & 0xFF;        // Low byte
+            i2c_write_blocking(PI_PORT, PICO_ADDR, buf, 4, false);
+        }
     }
 }
