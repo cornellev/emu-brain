@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
-project(i2c_com)
+project(spi_com)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES Clang)
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -12,7 +14,6 @@ find_package(rosidl_default_generators REQUIRED)
 
 set(msg_files
   "msg/StrainGauge.msg"
-  "msg/ElectricalState.msg"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -23,16 +24,16 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 # This includes the necessary I2C headers
 include_directories(SYSTEM /usr/include)
 
-add_executable(i2c_node src/i2c_node.cpp)
-ament_target_dependencies(i2c_node rclcpp std_msgs)
+add_executable(spi_node src/spi_node.cpp)
+ament_target_dependencies(spi_node rclcpp std_msgs)
 
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
-target_link_libraries(i2c_node ${cpp_typesupport_target})
+target_link_libraries(spi_node ${cpp_typesupport_target})
 ament_export_dependencies(rosidl_default_runtime)
 
 # Install the node executable and other resources
 install(TARGETS
-  i2c_node
+  spi_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

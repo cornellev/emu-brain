@@ -9,8 +9,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 def generate_launch_description():
     return LaunchDescription([
 	    Node(
-            package="i2c_com",
-            executable="i2c_node",
-            name="i2c_node",
+            package="spi_com",
+            executable="spi_node",
+            name="spi_node",
 	    )
     ])

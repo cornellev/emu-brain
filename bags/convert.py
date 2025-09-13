@@ -26,8 +26,8 @@ def main():
     topic_info = topics[topics["name"] == "/electrical_state"].iloc[0]
     topic_id, topic_type = topic_info["id"], topic_info["type"]
 
-    if topic_type != "serial_com/msg/ElectricalState":
-        raise ValueError(f"Topic /electrical_state has type {topic_type}, expected serial_com/msg/ElectricalState")
+    if topic_type != "i2c_com/msg/ElectricalState":
+        raise ValueError(f"Topic /electrical_state has type {topic_type}, expected i2c_com/msg/ElectricalState")
 
     # Load all messages for this topic
     query = f"SELECT timestamp, data FROM messages WHERE topic_id={topic_id}"
@@ -45,8 +45,10 @@ def main():
         rows.append({
             "ros_time_sec": ros_time_sec,
             "frame_id": deserialized.header.frame_id,
-            "voltage": deserialized.voltage,
+            "bus_voltage": deserialized.bus_voltage,
+            "shunt_voltage": deserialized.shunt_voltage,
             "current": deserialized.current,
+            "power": deserialized.power,
         })
 
     df = pd.DataFrame(rows)
