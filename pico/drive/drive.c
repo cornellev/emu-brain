@@ -24,7 +24,7 @@
 #define NUM_INPUTS 3
 const uint input_pins[NUM_INPUTS] = {13, 14, 15};
 
-#define PWM_TEST 16
+#define PWM_TEST 10
 uint slice_test;
 
 #define PWM_OUT 6
@@ -32,6 +32,9 @@ uint slice_out;
 
 #define ENABLE 7
 #define nBRAKE 8
+
+#define ENABLE2 11
+#define nBRAKE2 12
 
 #define HALL_TEST 5
 #define THROTTLE_ADC 26
@@ -130,7 +133,7 @@ void initialize()
     gpio_set_function(PWM_TEST, GPIO_FUNC_PWM);
     slice_test = pwm_gpio_to_slice_num(PWM_TEST);
     pwm_set_wrap(slice_test, WRAPVAL);
-    pwm_set_chan_level(slice_test, PWM_CHAN_A, duty_cycle_to_level(0.25));
+    pwm_set_chan_level(slice_test, PWM_CHAN_A, 0);
     pwm_set_enabled(slice_test, true);
 
     gpio_set_function(PWM_OUT, GPIO_FUNC_PWM);
@@ -147,6 +150,14 @@ void initialize()
     gpio_init(nBRAKE);
     gpio_set_dir(nBRAKE, GPIO_OUT);
     gpio_put(nBRAKE, 1);
+
+    gpio_init(ENABLE2);
+    gpio_set_dir(ENABLE2, GPIO_OUT);
+    gpio_put(ENABLE2, 1);
+
+    gpio_init(nBRAKE2);
+    gpio_set_dir(nBRAKE2, GPIO_OUT);
+    gpio_put(nBRAKE2, 1);
 
     for (int i = 0; i < NUM_INPUTS; i++)
     {
@@ -181,8 +192,13 @@ int main()
 
         // Calculate duty cycle
         float duty = throttle * (motor_rpm / RATED_MOTOR_RPM + MAX_VOLTAGE_AT_STALL / RATED_MOTOR_VOLTAGE);
-        print_float(duty);
+        uint64_t ms = time_us_64() / 1000;
+
+        char buffer[64];
+        sprintf(buffer, "%u,%.5f,%.5f\n", ms, throttle, motor_rpm);
+        uart_puts(UART_ID, buffer);
         // Write float to PWM output
         pwm_set_chan_level(slice_out, PWM_CHAN_A, duty_cycle_to_level(duty));
+        pwm_set_chan_level(slice_test, PWM_CHAN_A, duty_cycle_to_level(duty));
     }
 }
