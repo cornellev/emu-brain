@@ -181,7 +181,7 @@ int main()
 
         // Calculate duty cycle
         float duty = throttle * (motor_rpm / RATED_MOTOR_RPM + MAX_VOLTAGE_AT_STALL / RATED_MOTOR_VOLTAGE);
-        print_float(duty);
+        print_float(throttle);
         // Write float to PWM output
         pwm_set_chan_level(slice_out, PWM_CHAN_A, duty_cycle_to_level(duty));
     }
