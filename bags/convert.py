@@ -23,11 +23,11 @@ def main():
 
     # Load topics
     topics = pd.read_sql_query("SELECT id, name, type FROM topics", conn)
-    topic_info = topics[topics["name"] == "/electrical_state"].iloc[0]
+    topic_info = topics[topics["name"] == "/serial_msg"].iloc[0]
     topic_id, topic_type = topic_info["id"], topic_info["type"]
 
-    if topic_type != "i2c_com/msg/ElectricalState":
-        raise ValueError(f"Topic /electrical_state has type {topic_type}, expected i2c_com/msg/ElectricalState")
+    if topic_type != "std_msgs/msg/String":
+        raise ValueError(f"Topic /serial_msg has type {topic_type}, expected std_msgs/msg/String")
 
     # Load all messages for this topic
     query = f"SELECT timestamp, data FROM messages WHERE topic_id={topic_id}"
@@ -40,15 +40,10 @@ def main():
     for _, msg in messages.iterrows():
         deserialized = deserialize_message(msg["data"], msg_type)
 
-        ros_time_sec = deserialized.header.stamp.sec + deserialized.header.stamp.nanosec * 1e-9
+        # ros_time_sec = deserialized.header.stamp.sec + deserialized.header.stamp.nanosec * 1e-9
 
         rows.append({
-            "ros_time_sec": ros_time_sec,
-            "frame_id": deserialized.header.frame_id,
-            "bus_voltage": deserialized.bus_voltage,
-            "shunt_voltage": deserialized.shunt_voltage,
-            "current": deserialized.current,
-            "power": deserialized.power,
+            "data": deserialized.data
         })
 
     df = pd.DataFrame(rows)
