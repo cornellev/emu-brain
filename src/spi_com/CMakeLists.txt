@@ -27,6 +27,9 @@ include_directories(SYSTEM /usr/include)
 add_executable(spi_node src/spi_node.cpp)
 ament_target_dependencies(spi_node rclcpp std_msgs)
 
+find_library(PIGPIOD_IF2_LIB pigpiod_if2)
+target_link_libraries(spi_node ${PIGPIOD_IF2_LIB})
+
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(spi_node ${cpp_typesupport_target})
 ament_export_dependencies(rosidl_default_runtime)

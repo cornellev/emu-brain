@@ -7,38 +7,53 @@
 #include <string>
 #include <chrono>
 #include <linux/spi/spidev.h>
-#include <pigpio.h>
+#include <pigpiod_if2.h>
 
-#define SPI_DEV "/dev/spidev0.0"  // The SPI device file (for CS0)
-#define CS_PIN 8 // Chip Select Pin (GPIO8 - CE0)
+constexpr uint8_t SPI_MODE = 1;          // CPOL=0, CPHA=1
+constexpr uint32_t SPI_SPEED = 1000000;  // SPI speed (1 MHz)
+constexpr const char* SPI_DEVICE = "/dev/spidev0.0";
+
+#define GPIO_CS1 25         // CS1
+#define GPIO_CS2 27         // CS2
+#define GPIO_CS3 22         // CS3
 
 class SPINode : public rclcpp::Node {
 public:
     SPINode() : Node("spi_node") {
+
+        pi_ = pigpio_start(NULL, NULL);
+        if (pi_ < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to connect to pigpiod");
+            rclcpp::shutdown();
+            return;
+        } else {
+            RCLCPP_INFO(this->get_logger(), "pigpio initialized");
+        } 
+
+        set_mode(pi_, GPIO_CS1, PI_OUTPUT);
+        set_mode(pi_, GPIO_CS2, PI_OUTPUT);
+        set_mode(pi_, GPIO_CS3, PI_OUTPUT);
+
+        gpio_write(pi_, GPIO_CS1, 1);
+        gpio_write(pi_, GPIO_CS2, 1);
+        gpio_write(pi_, GPIO_CS3, 1);
         
         // Open SPI device
-        spi_fd_ = open(SPI_DEV, O_RDWR);
+        spi_fd_ = open(SPI_DEVICE, O_RDWR);
         if (spi_fd_ < 0) {
             RCLCPP_ERROR(this->get_logger(), "Failed to open SPI device");
             return;
         }
 
-        // Set SPI mode (CPOL=0, CPHA=0)
-        if (ioctl(spi_fd_, SPI_IOC_WR_MODE, &mode) < 0) {
+        // Set SPI mode
+        if (ioctl(spi_fd_, SPI_IOC_WR_MODE, &SPI_MODE) < 0) {
             RCLCPP_ERROR(this->get_logger(), "Failed to set SPI mode");
             close(spi_fd_);
             return;
         }
 
-        // Set number of bits per word (8 bits)
-        if (ioctl(spi_fd_, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to set SPI bits per word");
-            close(spi_fd_);
-            return;
-        }
-
-        // Set maximum speed for SPI (500 kHz)
-        if (ioctl(spi_fd_, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
+        // Set speed
+        if (ioctl(spi_fd_, SPI_IOC_WR_MAX_SPEED_HZ, &SPI_SPEED) < 0) {
             RCLCPP_ERROR(this->get_logger(), "Failed to set SPI max speed");
             close(spi_fd_);
             return;
@@ -46,54 +61,64 @@ public:
 
         RCLCPP_INFO(this->get_logger(), "SPI device initialized");
 
-        // Create a timer to periodically read from the SPI device
         timer_ = this->create_wall_timer(std::chrono::milliseconds(100), std::bind(&SPINode::timer_callback, this));
-
-        // Initialize ROS 2 publisher to send received SPI data
-        publisher_ = this->create_publisher<std_msgs::msg::String>("spi_data", 10);
     }
 
     ~SPINode() {
         if (spi_fd_ >= 0) {
             close(spi_fd_);
         }
+        if (pi_ >= 0) {
+            pigpio_stop(pi_);
+        }
     }
 
 private:
     int spi_fd_;
-    uint8_t mode = SPI_MODE_0;    // SPI mode (CPOL = 0, CPHA = 0)
-    uint8_t bits = 8;             // 8 bits per transfer
-    uint32_t speed = 500000;      // SPI speed (500kHz)
+    int pi_{-1};
     rclcpp::TimerBase::SharedPtr timer_;
-    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr publisher_;
 
-    uint8_t read_pico() {
-        uint8_t tx_buffer[1] = {0x00};  
-        uint8_t rx_buffer[1];           
+    void readData(int chipSelect)
+    {
 
-        struct spi_ioc_transfer transfer;
-        transfer.tx_buf = (unsigned long)tx_buffer;
-        transfer.rx_buf = (unsigned long)rx_buffer;
-        transfer.len = sizeof(tx_buffer);
-        transfer.speed_hz = speed;
-        transfer.bits_per_word = bits;
+        gpio_write(pi_, GPIO_CS1, chipSelect == 1 ? 0 : 1);
+        gpio_write(pi_, GPIO_CS2, chipSelect == 2 ? 0 : 1);
+        gpio_write(pi_, GPIO_CS3, chipSelect == 3 ? 0 : 1);
 
-        if (ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &transfer) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "SPI transfer failed!");
-            return 0x00;
+        std::vector<uint8_t> tx(10, 0x00);  // Dummy data to send
+        std::vector<uint8_t> rx(10, 0x00);  // Buffer to store received data
+
+        // SPI transfer structure   
+        struct spi_ioc_transfer transfer = {};
+        transfer.tx_buf = reinterpret_cast<unsigned long>(tx.data());
+        transfer.rx_buf = reinterpret_cast<unsigned long>(rx.data());
+        transfer.len = 10;  
+        transfer.speed_hz = SPI_SPEED;
+        transfer.bits_per_word = 8;
+
+        if (ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &transfer) < 0)
+        {
+            RCLCPP_ERROR(this->get_logger(), "SPI transfer failed.");
+            return;
         }
+
+        RCLCPP_INFO(this->get_logger(), "Received SPI data: ");
+        for (int i = 0; i < 10; ++i)
+        {
+            RCLCPP_INFO(this->get_logger(), "0x%02X", rx[i]);
+        }
+
         
-        return rx_buffer[0];
+        gpio_write(pi_, GPIO_CS1, 1);
+        gpio_write(pi_, GPIO_CS2, 1);
+        gpio_write(pi_, GPIO_CS3, 1);
     }
 
     // Timer callback to periodically read from the SPI device
     void timer_callback() {
-        uint8_t raw_value = read_pico();
-        RCLCPP_INFO(this->get_logger(), "Raw Value: %d", raw_value);
-
-        // auto message = std_msgs::msg::String();
-        // message.data = std::to_string(raw_value);
-        // publisher_->publish(message);
+        // uint8_t raw_value = read_pico();
+        // RCLCPP_INFO(this->get_logger(), "Raw Value: %d", raw_value);
+        readData(1); // Read from device with CS1
     }
 };
 
