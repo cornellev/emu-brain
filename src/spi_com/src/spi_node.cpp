@@ -8,6 +8,9 @@
 #include <chrono>
 #include <linux/spi/spidev.h>
 #include <pigpiod_if2.h>
+#include "spi_com/msg/strain_gauge.hpp"
+
+using namespace std::chrono_literals;
 
 constexpr uint8_t SPI_MODE = 1;          // CPOL=0, CPHA=1
 constexpr uint32_t SPI_SPEED = 1000000;  // SPI speed (1 MHz)
@@ -61,6 +64,7 @@ public:
 
         RCLCPP_INFO(this->get_logger(), "SPI device initialized");
 
+        mech_pub_ = this->create_publisher<spi_com::msg::StrainGauge>("strain_gauge", 1);
         timer_ = this->create_wall_timer(std::chrono::milliseconds(100), std::bind(&SPINode::timer_callback, this));
     }
 
@@ -74,6 +78,7 @@ public:
     }
 
 private:
+    rclcpp::Publisher<spi_com::msg::StrainGauge>::SharedPtr mech_pub_;
     int spi_fd_;
     int pi_{-1};
     rclcpp::TimerBase::SharedPtr timer_;
@@ -92,7 +97,7 @@ private:
         struct spi_ioc_transfer transfer = {};
         transfer.tx_buf = reinterpret_cast<unsigned long>(tx.data());
         transfer.rx_buf = reinterpret_cast<unsigned long>(rx.data());
-        transfer.len = 10;  
+        transfer.len = 11;  
         transfer.speed_hz = SPI_SPEED;
         transfer.bits_per_word = 8;
 
@@ -115,23 +120,59 @@ private:
 
     // Timer callback to periodically read from the SPI device
     void timer_callback() {
-        std::vector<uint8_t> rx = readData(1); 
+        std::vector<uint8_t> p1 = readData(1); 
+        std::vector<uint8_t> p2 = readData(2);
+        std::vector<uint8_t> p3 = readData(3);
 
         uint32_t timestamp = 0;
         uint16_t adc1 = 0;
         uint16_t adc2 = 0;
         uint16_t adc3 = 0;
+        uint16_t adc4 = 0;
+        uint16_t adc5 = 0;
+        uint16_t adc6 = 0;
 
-        timestamp = (rx[3]) | (rx[2] << 8) | (rx[1] << 16) | (rx[0] << 24);
-        adc1 = (rx[5]) | (rx[4] << 8);
-        adc2 = (rx[7]) | (rx[6] << 8);
-        adc3 = (rx[9]) | (rx[8] << 8);
+        timestamp = (p1[4]) | (p1[3] << 8) | (p1[2] << 16) | (p1[1] << 24);
+        adc1 = (p1[6]) | (p1[5] << 8);
+        adc2 = (p1[8]) | (p1[7] << 8);
+        adc3 = (p1[10]) | (p1[9] << 8);
+        auto m1 = spi_com::msg::StrainGauge();
+        m1.timestamp = timestamp;
+        m1.sensor1 = adc1;
+        m1.sensor2 = adc2;
+        m1.sensor3 = adc3;
+        mech_pub_->publish(m1);
+
+        // RCLCPP_INFO(this->get_logger(), "Received SPI data:");
+        // for (int i = 0; i < 11; i++){
+        //     RCLCPP_INFO(this->get_logger(), "0x%02X", p1[i]);
+        // }
+        // RCLCPP_INFO(this->get_logger(), "Timestamp: %u", timestamp);
+        // RCLCPP_INFO(this->get_logger(), "ADC1: %u", adc1);  
+        // RCLCPP_INFO(this->get_logger(), "ADC2: %u", adc2);  
+        // RCLCPP_INFO(this->get_logger(), "ADC3: %u", adc3);  
+
+        rclcpp::sleep_for(20ms);
+
+        timestamp = (p2[4]) | (p2[3] << 8) | (p2[2] << 16) | (p2[1] << 24);
+        adc4 = (p2[6]) | (p2[5] << 8);
+        adc5 = (p2[8]) | (p2[7] << 8);
+        adc6 = (p2[10]) | (p2[9] << 8);
+        auto m2 = spi_com::msg::StrainGauge();
+        m2.timestamp = timestamp;
+        m2.sensor4 = adc4;
+        m2.sensor5 = adc5;
+        m2.sensor6 = adc6;
+        mech_pub_->publish(m2);
 
         RCLCPP_INFO(this->get_logger(), "Received SPI data:");
+        // for (int i = 0; i < 11; i++){
+        //     RCLCPP_INFO(this->get_logger(), "0x%02X", p2[i]);
+        // }
         RCLCPP_INFO(this->get_logger(), "Timestamp: %u", timestamp);
-        RCLCPP_INFO(this->get_logger(), "ADC1: %u", adc1);  
-        RCLCPP_INFO(this->get_logger(), "ADC2: %u", adc2);  
-        RCLCPP_INFO(this->get_logger(), "ADC3: %u", adc3);  
+        RCLCPP_INFO(this->get_logger(), "ADC4: %u", adc4);  
+        RCLCPP_INFO(this->get_logger(), "ADC5: %u", adc5);  
+        RCLCPP_INFO(this->get_logger(), "ADC6: %u", adc6);  
     }
 };
 

@@ -1,4 +1,7 @@
-float64 timestamp       # ms
-float64 sensor1 
-float64 sensor2 
-float64 sensor3 
+uint32 timestamp
+uint16 sensor1 
+uint16 sensor2 
+uint16 sensor3 
+uint16 sensor4 
+uint16 sensor5 
+uint16 sensor6 
