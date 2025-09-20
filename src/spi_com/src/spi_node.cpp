@@ -64,8 +64,9 @@ public:
 
         RCLCPP_INFO(this->get_logger(), "SPI device initialized");
 
-        mech_pub_ = this->create_publisher<spi_com::msg::StrainGauge>("strain_gauge", 1);
-        timer_ = this->create_wall_timer(std::chrono::milliseconds(100), std::bind(&SPINode::timer_callback, this));
+        mech_pub1_ = this->create_publisher<spi_com::msg::StrainGauge>("strain_gauge_123", 1);
+        mech_pub2_ = this->create_publisher<spi_com::msg::StrainGauge>("strain_gauge_456", 1);
+        timer_ = this->create_wall_timer(std::chrono::microseconds(500), std::bind(&SPINode::timer_callback, this));
     }
 
     ~SPINode() {
@@ -78,7 +79,8 @@ public:
     }
 
 private:
-    rclcpp::Publisher<spi_com::msg::StrainGauge>::SharedPtr mech_pub_;
+    rclcpp::Publisher<spi_com::msg::StrainGauge>::SharedPtr mech_pub1_;
+    rclcpp::Publisher<spi_com::msg::StrainGauge>::SharedPtr mech_pub2_;
     int spi_fd_;
     int pi_{-1};
     rclcpp::TimerBase::SharedPtr timer_;
@@ -122,7 +124,7 @@ private:
     void timer_callback() {
         std::vector<uint8_t> p1 = readData(1); 
         std::vector<uint8_t> p2 = readData(2);
-        std::vector<uint8_t> p3 = readData(3);
+        // std::vector<uint8_t> p3 = readData(3);
 
         uint32_t timestamp = 0;
         uint16_t adc1 = 0;
@@ -141,18 +143,7 @@ private:
         m1.sensor1 = adc1;
         m1.sensor2 = adc2;
         m1.sensor3 = adc3;
-        mech_pub_->publish(m1);
-
-        // RCLCPP_INFO(this->get_logger(), "Received SPI data:");
-        // for (int i = 0; i < 11; i++){
-        //     RCLCPP_INFO(this->get_logger(), "0x%02X", p1[i]);
-        // }
-        // RCLCPP_INFO(this->get_logger(), "Timestamp: %u", timestamp);
-        // RCLCPP_INFO(this->get_logger(), "ADC1: %u", adc1);  
-        // RCLCPP_INFO(this->get_logger(), "ADC2: %u", adc2);  
-        // RCLCPP_INFO(this->get_logger(), "ADC3: %u", adc3);  
-
-        rclcpp::sleep_for(20ms);
+        mech_pub1_->publish(m1);
 
         timestamp = (p2[4]) | (p2[3] << 8) | (p2[2] << 16) | (p2[1] << 24);
         adc4 = (p2[6]) | (p2[5] << 8);
@@ -163,16 +154,16 @@ private:
         m2.sensor4 = adc4;
         m2.sensor5 = adc5;
         m2.sensor6 = adc6;
-        mech_pub_->publish(m2);
+        mech_pub2_->publish(m2);
 
-        RCLCPP_INFO(this->get_logger(), "Received SPI data:");
+        // RCLCPP_INFO(this->get_logger(), "Received SPI data:");
         // for (int i = 0; i < 11; i++){
         //     RCLCPP_INFO(this->get_logger(), "0x%02X", p2[i]);
         // }
-        RCLCPP_INFO(this->get_logger(), "Timestamp: %u", timestamp);
-        RCLCPP_INFO(this->get_logger(), "ADC4: %u", adc4);  
-        RCLCPP_INFO(this->get_logger(), "ADC5: %u", adc5);  
-        RCLCPP_INFO(this->get_logger(), "ADC6: %u", adc6);  
+        // RCLCPP_INFO(this->get_logger(), "Timestamp: %u", timestamp);
+        // RCLCPP_INFO(this->get_logger(), "ADC4: %u", adc4);  
+        // RCLCPP_INFO(this->get_logger(), "ADC5: %u", adc5);  
+        // RCLCPP_INFO(this->get_logger(), "ADC6: %u", adc6);  
     }
 };
 
