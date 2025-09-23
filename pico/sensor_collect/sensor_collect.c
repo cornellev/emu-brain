@@ -2,11 +2,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include "pico/stdlib.h"
+#include "hardware/spi.h"
 #include "hardware/i2c.h"
 #include "hardware/dma.h"
 
 // LED for status indication
 #define LED_PIN 25
+
+// SPI Configuration
+#define SPI_PORT spi0
+#define PIN_RX 16
+#define PIN_TX 19
+#define PIN_SCK  18
+#define PIN_CS   17
 
 // INA226 I2C Configuration
 #define INA226_I2C_PORT i2c1
@@ -58,7 +66,7 @@ typedef struct
 } ina226_data_t;
 
 // For TX Buffer
-#define LEN sizeof(ina226_data_t)
+#define LEN sizeof(float) * 2 + 4
 #define TRIGGER 0
 
 uint8_t tx_data[LEN + 1]; // +1 for end byte
@@ -102,12 +110,12 @@ void pack_all_sensor_data(void)
     pack_data_time(0);
     pack_data_float(4, sensor_data.shunt_voltage_mv);
     pack_data_float(8, sensor_data.bus_voltage_v);
-    pack_data_float(12, sensor_data.current_a);
-    pack_data_float(16, sensor_data.power_w);
-    pack_data_uint16(20, sensor_data.raw_shunt);
-    pack_data_uint16(22, sensor_data.raw_bus);
-    pack_data_uint16(24, sensor_data.raw_current);
-    pack_data_uint16(26, sensor_data.raw_power);
+    // pack_data_float(12, sensor_data.current_a);
+    // pack_data_float(16, sensor_data.power_w);
+    // pack_data_uint16(20, sensor_data.raw_shunt);
+    // pack_data_uint16(22, sensor_data.raw_bus);
+    // pack_data_uint16(24, sensor_data.raw_current);
+    // pack_data_uint16(26, sensor_data.raw_power);
 }
 
 // Function prototypes
@@ -332,7 +340,7 @@ void irq_handler(uint gpio, uint32_t events)
     {
         gpio_set_function(PIN_TX, GPIO_FUNC_SPI);
 
-        ina226_read_all_data()
+        ina226_read_all_data();
         pack_all_sensor_data();
 
         tx_data[LEN] = 0x00; // End byte
@@ -349,7 +357,7 @@ void irq_handler(uint gpio, uint32_t events)
     else if (events & GPIO_IRQ_EDGE_RISE)
     {
         // printf("here\n");
-        set_gpio_hi_z(PIN_TX);
+        gpio_set_function(PIN_TX, GPIO_FUNC_NULL); // Set pin to high-Z
     }
 }
 int initialize()
