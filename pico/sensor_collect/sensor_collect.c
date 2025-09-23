@@ -61,7 +61,7 @@ typedef struct
 #define LEN sizeof(ina226_data_t)
 #define TRIGGER 0
 
-uint8_t tx_data[LEN];
+uint8_t tx_data[LEN + 1]; // +1 for end byte
 int data_chan;
 ina226_data_t sensor_data;
 
@@ -331,10 +331,14 @@ void irq_handler(uint gpio, uint32_t events)
     if (events & GPIO_IRQ_EDGE_FALL)
     {
         gpio_set_function(PIN_TX, GPIO_FUNC_SPI);
+
         ina226_read_all_data()
-            pack_all_sensor_data();
-        tx_data[10] = 0x00; // End byte
+        pack_all_sensor_data();
+
+        tx_data[LEN] = 0x00; // End byte
+
         dma_hw->ch[data_chan].read_addr = (uintptr_t)tx_data;
+        
         dma_start_channel_mask(1u << data_chan);
         printf("\nSent: ");
         for (int i = 0; i < LEN; i++)
@@ -351,22 +355,27 @@ void irq_handler(uint gpio, uint32_t events)
 int initialize()
 {
     stdio_init_all();
+
     // Initialize LED
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
+
     // Trigger interrupt on falling/rising edges
     gpio_init(TRIGGER);
     gpio_set_dir(TRIGGER, GPIO_IN);
     gpio_set_irq_enabled_with_callback(TRIGGER, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &irq_handler);
+
     sleep_ms(2000);
     printf("\n\n========================================\n");
     printf("INA226 Current/Power Monitor - Data Mode\n");
     printf("========================================\n\n");
+
     // Initialize INA226
     if (!ina226_init())
     {
         printf("FAILED: Could not initialize INA226!\n");
         printf("Check your connections and try again.\n");
+
         // Error blink pattern
         while (1)
         {
