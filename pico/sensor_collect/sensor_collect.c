@@ -60,35 +60,45 @@ typedef struct {
 
 ina226_data_t sensor_data;
 
-#define LEN sizeof(ina226_data_t)
+#define LEN sizeof(ina226_data_t) + 4 // 4 extra bytes for timestamp
 
 uint8_t tx_data[LEN]; 
 int data_chan;
 
-void pack_data_float(int len, int start_index, float data) {
-    if (start_index + 4 > len) return; // Prevent overflow
+void pack_data_time(int start_index) {
+    uint32_t now_us = (uint32_t)time_us_64();
+    if (start_index + 4 > LEN) return; // Prevent overflow
+    tx_data[start_index] = (now_us >> 24) & 0xFF;
+    tx_data[start_index + 1] = (now_us >> 16) & 0xFF;
+    tx_data[start_index + 2] = (now_us >> 8) & 0xFF;
+    tx_data[start_index + 3] = (now_us >> 0) & 0xFF;
+}
+
+void pack_data_float(int start_index, float data) {
+    if (start_index + 4 > LEN) return; // Prevent overflow
     uint8_t *p = (uint8_t*)&data;
     for (int i = 0; i < 4; i++) {
         tx_data[start_index + i] = p[i];
     }
 }
 
-void pack_data_uint16(int len, int start_index, uint16_t data) {
-    if (start_index + 2 > len) return; // Prevent overflow
+void pack_data_uint16(int start_index, uint16_t data) {
+    if (start_index + 2 > LEN) return; // Prevent overflow
     tx_data[start_index] = (data >> 8) & 0xFF; // MSB
     tx_data[start_index + 1] = data & 0xFF;    // LSB
 }
 
 void pack_all_sensor_data(void) {
     // Pack the data into the transmission buffer
-    pack_data_float(LEN, 0, sensor_data.shunt_voltage_mv);
-    pack_data_float(LEN, 4, sensor_data.bus_voltage_v);
-    pack_data_float(LEN, 8, sensor_data.current_a);
-    pack_data_float(LEN, 12, sensor_data.power_w);
-    pack_data_uint16(LEN, 16, sensor_data.raw_shunt);
-    pack_data_uint16(LEN, 18, sensor_data.raw_bus);
-    pack_data_uint16(LEN, 20, sensor_data.raw_current);
-    pack_data_uint16(LEN, 22, sensor_data.raw_power);
+    pack_data_time(0);
+    pack_data_float(4, sensor_data.shunt_voltage_mv);
+    pack_data_float(8, sensor_data.bus_voltage_v);
+    pack_data_float(12, sensor_data.current_a);
+    pack_data_float(16, sensor_data.power_w);
+    pack_data_uint16(20, sensor_data.raw_shunt);
+    pack_data_uint16(22, sensor_data.raw_bus);
+    pack_data_uint16(24, sensor_data.raw_current);
+    pack_data_uint16(26, sensor_data.raw_power);
 }
 
 // Function prototypes
@@ -265,6 +275,49 @@ void ina226_print_data(void) {
     printf("Shunt:%+7.3fmV Bus:%6.3fV Current:%+7.3fA Power:%7.3fW\n",
            sensor_data.shunt_voltage_mv, sensor_data.bus_voltage_v,
            sensor_data.current_a, sensor_data.power_w);
+}
+
+bool ina226_configure(void) {
+    // Configuration: 16 averages, 1.1ms conversion times, continuous mode
+    uint16_t config = INA226_CONFIG_AVG_16 |
+                      INA226_CONFIG_VBUSCT_1100US |
+                      INA226_CONFIG_VSHCT_1100US |
+                      INA226_CONFIG_MODE_SHUNT_BUS_CONT;
+    
+    if (!ina226_write_register(INA226_REG_CONFIG, config)) {
+        return false;
+    }
+    
+    printf("INA226: Configured for continuous measurement\n");
+    return true;
+}
+
+bool ina226_read_all_data(void) {
+    // Read all measurement registers
+    if (!ina226_read_register(INA226_REG_SHUNT_V, &sensor_data.raw_shunt) ||
+        !ina226_read_register(INA226_REG_BUS_V, &sensor_data.raw_bus) ||
+        !ina226_read_register(INA226_REG_CURRENT, &sensor_data.raw_current) ||
+        !ina226_read_register(INA226_REG_POWER, &sensor_data.raw_power)) {
+        return false;
+    }
+    
+    // Convert raw values to engineering units
+    
+    // Shunt voltage (signed 16-bit value)
+    int16_t signed_shunt = (int16_t)sensor_data.raw_shunt;
+    sensor_data.shunt_voltage_mv = signed_shunt * INA226_SHUNT_LSB_UV / 1000.0;
+    
+    // Bus voltage (15-bit value, MSB is always 0)
+    sensor_data.bus_voltage_v = (sensor_data.raw_bus & 0x7FFF) * INA226_BUS_LSB_MV / 1000.0;
+    
+    // Current (signed 16-bit value, 1mA per LSB)
+    int16_t signed_current = (int16_t)sensor_data.raw_current;
+    sensor_data.current_a = signed_current * 0.001; // 1mA per LSB
+    
+    // Power (unsigned 16-bit value, 25mW per LSB)
+    sensor_data.power_w = sensor_data.raw_power * 0.025; // 25mW per LSB
+    
+    return true;
 }
 
 int main() {
