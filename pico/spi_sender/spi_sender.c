@@ -1,3 +1,6 @@
+// spi_sender.c
+// Sends ADC readings and timestamp over SPI when triggered by a GPIO pin interrupt.
+
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/spi.h"

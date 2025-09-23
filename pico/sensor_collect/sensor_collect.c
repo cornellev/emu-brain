@@ -1,3 +1,6 @@
+// sensor_collect.c
+// Collects data from INA226 current/power monitor over I2C and prints to console
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +59,37 @@ typedef struct {
 } ina226_data_t;
 
 ina226_data_t sensor_data;
+
+#define LEN sizeof(ina226_data_t)
+
+uint8_t tx_data[LEN]; 
+int data_chan;
+
+void pack_data_float(int len, int start_index, float data) {
+    if (start_index + 4 > len) return; // Prevent overflow
+    uint8_t *p = (uint8_t*)&data;
+    for (int i = 0; i < 4; i++) {
+        tx_data[start_index + i] = p[i];
+    }
+}
+
+void pack_data_uint16(int len, int start_index, uint16_t data) {
+    if (start_index + 2 > len) return; // Prevent overflow
+    tx_data[start_index] = (data >> 8) & 0xFF; // MSB
+    tx_data[start_index + 1] = data & 0xFF;    // LSB
+}
+
+void pack_all_sensor_data(void) {
+    // Pack the data into the transmission buffer
+    pack_data_float(LEN, 0, sensor_data.shunt_voltage_mv);
+    pack_data_float(LEN, 4, sensor_data.bus_voltage_v);
+    pack_data_float(LEN, 8, sensor_data.current_a);
+    pack_data_float(LEN, 12, sensor_data.power_w);
+    pack_data_uint16(LEN, 16, sensor_data.raw_shunt);
+    pack_data_uint16(LEN, 18, sensor_data.raw_bus);
+    pack_data_uint16(LEN, 20, sensor_data.raw_current);
+    pack_data_uint16(LEN, 22, sensor_data.raw_power);
+}
 
 // Function prototypes
 bool ina226_write_register(uint8_t reg, uint16_t value);
