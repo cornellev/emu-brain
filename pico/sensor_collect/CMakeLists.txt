@@ -42,7 +42,7 @@ pico_set_program_version(sensor_collect "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(sensor_collect 0)
-pico_enable_stdio_usb(sensor_collect 0)
+pico_enable_stdio_usb(sensor_collect 1)
 
 # Add the standard library to the build
 target_link_libraries(sensor_collect
@@ -58,6 +58,7 @@ target_include_directories(sensor_collect PRIVATE
 target_link_libraries(sensor_collect 
         hardware_spi
         hardware_i2c
+        hardware_dma
         )
 
 pico_add_extra_outputs(sensor_collect)
