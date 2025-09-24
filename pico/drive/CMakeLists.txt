@@ -42,10 +42,10 @@ pico_set_program_version(drive "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(drive 0)
-pico_enable_stdio_usb(drive 0)
+pico_enable_stdio_usb(drive 1)
 
 # Add the standard library to the build
-target_link_libraries(drive pico_stdlib pico_bootsel_via_double_reset pico_multicore pico_bootsel_via_double_reset hardware_pwm hardware_irq hardware_adc)
+target_link_libraries(drive pico_stdlib pico_bootsel_via_double_reset pico_multicore hardware_pwm hardware_irq hardware_adc)
 
 # Add the standard include files to the build
 target_include_directories(drive PRIVATE

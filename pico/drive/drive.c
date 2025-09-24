@@ -14,18 +14,11 @@
 #include "hardware/adc.h"
 #include "hardware/uart.h"
 #include "pico/time.h"
-
-// UART to Pi. Handles sending sensor data.
-#define UART_ID uart0
-#define BAUD_RATE 115200
 #define LED 25
 
 // Hall sensor inputs
 #define NUM_INPUTS 3
 const uint input_pins[NUM_INPUTS] = {13, 14, 15};
-
-#define PWM_TEST 10
-uint slice_test;
 
 #define PWM_OUT 6
 uint slice_out;
@@ -39,6 +32,8 @@ uint slice_out;
 #define HALL_TEST 5
 #define THROTTLE_ADC 26
 
+#define TAU 1e6 // time constant in us for low-pass filter
+
 volatile float motor_rpm = 0.0f;
 const float RATED_MOTOR_RPM = 3000.0f;
 const float RATED_MOTOR_VOLTAGE = 48.0f;
@@ -47,43 +42,63 @@ volatile float throttle = 0.0f;
 
 const int PWM_FREQ = 5000;
 const int WRAPVAL = SYS_CLK_HZ / PWM_FREQ - 1;
+const float MIN_RPM = 25.0f;
 
 // if the motor is stationary, then the interrupt needs to be called
 // periodically to avoid the interrupt from never being called
 // and the motor_rpm from never being updated
 struct repeating_timer timer;
 
-void print_uint(unsigned int value)
-{
-    char buffer[32]; // buffer to hold the string representation of the number
-    sprintf(buffer, "%u\n", value);
-    uart_puts(UART_ID, buffer);
-}
-
-void print_float(float value)
-{
-    char buffer[32]; // buffer to hold the string representation of the number
-    sprintf(buffer, "%f\n", value);
-    uart_puts(UART_ID, buffer);
-}
-
 // time of last irq
 volatile uint32_t irq_prev_time = 0;
+
+bool timer_callback(struct repeating_timer *t)
+{
+    // no velocity on boot
+    if (irq_prev_time == 0) {
+        motor_rpm = 0.0f;
+    }
+
+    int timer_current_time = time_us_64();
+    float timer_period = (float)(timer_current_time - irq_prev_time);
+    
+    // low-pass filter
+    float raw_rpm = 2.5e6f / timer_period; 
+    float alpha = timer_period / (TAU + timer_period);
+    motor_rpm = alpha * raw_rpm + (1.0f - alpha) * motor_rpm;
+
+    // minimum measurable rpm is 25 rpm
+    if (motor_rpm < MIN_RPM)
+        motor_rpm = 0.0f;
+    
+    cancel_repeating_timer(&timer);
+    add_repeating_timer_ms(100, (repeating_timer_callback_t)timer_callback, NULL, &timer);
+    return true;
+}
 
 void irq_handler(uint gpio, uint32_t events)
 {
     int irq_current_time = time_us_64();
+
     // time between steps in microseconds
-    int step_period = irq_current_time - irq_prev_time;
+    float step_period = (float)(irq_current_time - irq_prev_time);
+    if (step_period <= 800.0f) { // invalid period, ignore
+        return;
+    }
+
     irq_prev_time = irq_current_time;
 
     // step/us * 1 elec. rev/6 steps * 1 mech. rev/4 elec. rev * 1e6 us/s * 60 s/min
     // = 2.5e6 rpm
-    motor_rpm = 2.5e6f / step_period; // in RPM
+    float raw_rpm = 2.5e6f / step_period; 
+
+    // low-pass filter
+    float alpha = step_period / (TAU + step_period);
+    motor_rpm = alpha * raw_rpm + (1.0f - alpha) * motor_rpm;
 
     // reset the timer to call this function again in 100ms if no step is detected
     cancel_repeating_timer(&timer);
-    add_repeating_timer_ms(100, (repeating_timer_callback_t)irq_handler, NULL, &timer);
+    add_repeating_timer_ms(100, (repeating_timer_callback_t)timer_callback, NULL, &timer);
 }
 
 // Convert a duty cycle percentage (0 to 1) to a level value (0 to PWM_WRAP)
@@ -126,16 +141,6 @@ void initialize()
     pwm_set_chan_level(slice_num, PWM_CHAN_B, step_period_clks / 2);
     pwm_set_enabled(slice_num, true);
 
-    uart_init(UART_ID, BAUD_RATE);
-    gpio_set_function(0, GPIO_FUNC_UART); // TX
-    gpio_set_function(1, GPIO_FUNC_UART); // RX
-
-    gpio_set_function(PWM_TEST, GPIO_FUNC_PWM);
-    slice_test = pwm_gpio_to_slice_num(PWM_TEST);
-    pwm_set_wrap(slice_test, WRAPVAL);
-    pwm_set_chan_level(slice_test, PWM_CHAN_A, 0);
-    pwm_set_enabled(slice_test, true);
-
     gpio_set_function(PWM_OUT, GPIO_FUNC_PWM);
     slice_out = pwm_gpio_to_slice_num(PWM_OUT);
     pwm_set_wrap(slice_out, WRAPVAL);
@@ -171,7 +176,7 @@ void initialize()
     gpio_set_irq_enabled(input_pins[2], GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
 
     // add a timer that will call the irq_handler if no step has been detected for 100ms
-    add_repeating_timer_ms(100, (repeating_timer_callback_t)irq_handler, NULL, &timer);
+    add_repeating_timer_ms(100, (repeating_timer_callback_t)timer_callback, NULL, &timer);
 
     // configure adc for throttle input
     gpio_init(THROTTLE_ADC);
@@ -188,17 +193,17 @@ int main()
 
     while (true)
     {
-        throttle = (float)adc_deadzone(adc_read()) / 4095.0f;
+        // throttle = (float)adc_deadzone(adc_read()) / 4095.0f;
 
         // Calculate duty cycle
         float duty = throttle * (motor_rpm / RATED_MOTOR_RPM + MAX_VOLTAGE_AT_STALL / RATED_MOTOR_VOLTAGE);
         uint64_t ms = time_us_64() / 1000;
 
-        char buffer[64];
-        sprintf(buffer, "%u,%.5f,%.5f\n", ms, throttle, motor_rpm);
-        uart_puts(UART_ID, buffer);
+        // printf("%u,%.5f,%.5f\n", ms, throttle, motor_rpm);
+        if (motor_rpm > 1600.0f) {
+            printf("motor_rpm: %.2f\n", motor_rpm);
+        }
         // Write float to PWM output
         pwm_set_chan_level(slice_out, PWM_CHAN_A, duty_cycle_to_level(duty));
-        pwm_set_chan_level(slice_test, PWM_CHAN_A, duty_cycle_to_level(duty));
     }
 }
