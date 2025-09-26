@@ -28,38 +28,38 @@ set(PICO_BOARD pico CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(sensor_collect C CXX ASM)
+project(power_monitor C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(sensor_collect sensor_collect.c )
+add_executable(power_monitor power_monitor.c )
 
-pico_set_program_name(sensor_collect "sensor_collect")
-pico_set_program_version(sensor_collect "0.1")
+pico_set_program_name(power_monitor "power_monitor")
+pico_set_program_version(power_monitor "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(sensor_collect 0)
-pico_enable_stdio_usb(sensor_collect 1)
+pico_enable_stdio_uart(power_monitor 0)
+pico_enable_stdio_usb(power_monitor 1)
 
 # Add the standard library to the build
-target_link_libraries(sensor_collect
+target_link_libraries(power_monitor
         pico_stdlib
         pico_bootsel_via_double_reset )
 
 # Add the standard include files to the build
-target_include_directories(sensor_collect PRIVATE
+target_include_directories(power_monitor PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
 )
 
 # Add any user requested libraries
-target_link_libraries(sensor_collect 
+target_link_libraries(power_monitor 
         hardware_spi
         hardware_i2c
         hardware_dma
         )
 
-pico_add_extra_outputs(sensor_collect)
+pico_add_extra_outputs(power_monitor)
 
