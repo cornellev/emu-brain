@@ -49,8 +49,18 @@
 #define INA226_BUS_LSB_MV 1.25  // 1.25 mV per LSB
 
 // Application-specific configuration
-#define SHUNT_RESISTOR_OHMS 0.001 // 1mΩ shunt resistor (adjust as needed)
-#define MAX_EXPECTED_CURRENT 1.0  // 1A maximum expected current (adjust as needed)
+#define SHUNT_RESISTOR_OHMS 0.001 // 1mΩ shunt resistor
+#define MAX_EXPECTED_CURRENT 1.0  // 1A maximum expected current
+
+// Simple timing configuration
+#define READ_INTERVAL_MS 5        // Read sensor every 5ms
+#define SAMPLES_PER_TRANSMISSION 4 // 4 samples = 20ms = 50Hz
+#define NUM_BUFFERS 2             // Simple double buffering
+
+// Buffer configuration
+#define SAMPLE_SIZE (sizeof(float) * 2 + 4)  // timestamp + current + voltage = 12 bytes
+#define BUFFER_SIZE (SAMPLE_SIZE * SAMPLES_PER_TRANSMISSION) // 48 bytes per buffer
+#define TRIGGER 17
 
 // INA226 structure to hold sensor data
 typedef struct
@@ -65,60 +75,57 @@ typedef struct
     uint16_t raw_power;
 } ina226_data_t;
 
-// For TX Buffer
-#define LEN sizeof(float) * 2 + 4
-#define TRIGGER 17
+// Simple buffer structure
+typedef struct {
+    uint8_t tx_data[BUFFER_SIZE];
+    bool ready_to_send;
+    bool being_transmitted;
+} buffer_t;
 
-uint8_t tx_data[LEN + 1]; // +1 for end byte
-int data_chan;
-ina226_data_t sensor_data;
+// Global variables
+static buffer_t buffers[NUM_BUFFERS];
+static int write_buffer = 0;    // Which buffer we're writing to
+static int read_buffer = 0;     // Which buffer to transmit
+static int sample_count = 0;    // How many samples in current buffer
+static volatile bool transmission_requested = false;
+static volatile bool dma_busy = false;
 
-// Packing data into buffer
-void pack_data_time(int start_index)
+static int data_chan;
+static ina226_data_t sensor_data;
+
+// Simple packing functions
+void pack_data_time(uint8_t *buffer, int offset)
 {
     uint32_t now_us = (uint32_t)time_us_64();
-    if (start_index + 4 > LEN)
-        return; // Prevent overflow
-    tx_data[start_index] = (now_us >> 24) & 0xFF;
-    tx_data[start_index + 1] = (now_us >> 16) & 0xFF;
-    tx_data[start_index + 2] = (now_us >> 8) & 0xFF;
-    tx_data[start_index + 3] = (now_us >> 0) & 0xFF;
+    buffer[offset + 0] = (now_us >> 24) & 0xFF;
+    buffer[offset + 1] = (now_us >> 16) & 0xFF;
+    buffer[offset + 2] = (now_us >> 8) & 0xFF;
+    buffer[offset + 3] = (now_us >> 0) & 0xFF;
 }
 
-void pack_data_float(int start_index, float data)
+void pack_data_float(uint8_t *buffer, int offset, float data)
 {
-    if (start_index + 4 > LEN)
-        return; // Prevent overflow
     uint8_t *p = (uint8_t *)&data;
-    for (int i = 0; i < 4; i++)
-    {
-        tx_data[start_index + i] = p[i];
+    for (int i = 0; i < 4; i++) {
+        buffer[offset + i] = p[i];
     }
 }
 
-void pack_data_uint16(int start_index, uint16_t data)
+void pack_sample(uint8_t *buffer, int sample_index)
 {
-    if (start_index + 2 > LEN)
-        return;                                // Prevent overflow
-    tx_data[start_index] = (data >> 8) & 0xFF; // MSB
-    tx_data[start_index + 1] = data & 0xFF;    // LSB
+    int offset = sample_index * SAMPLE_SIZE;
+    pack_data_time(buffer, offset);
+    pack_data_float(buffer, offset + 4, sensor_data.current_a);
+    pack_data_float(buffer, offset + 8, sensor_data.bus_voltage_v);
 }
 
-void pack_all_sensor_data(void)
-{
-    // Pack the data into the transmission buffer
-    pack_data_time(0);
-    pack_data_float(4, sensor_data.current_a);
-    pack_data_float(8, sensor_data.bus_voltage_v);
-}
-
+// INA226 functions (unchanged)
 bool ina226_write_register(uint8_t reg, uint16_t value)
 {
     uint8_t buffer[3];
     buffer[0] = reg;
-    buffer[1] = (value >> 8) & 0xFF; // MSB first
-    buffer[2] = value & 0xFF;        // LSB second
-
+    buffer[1] = (value >> 8) & 0xFF;
+    buffer[2] = value & 0xFF;
     int result = i2c_write_blocking(I2C_PORT, INA226_ADDRESS, buffer, 3, false);
     return (result == 3);
 }
@@ -126,134 +133,163 @@ bool ina226_write_register(uint8_t reg, uint16_t value)
 bool ina226_read_register(uint8_t reg, uint16_t *value)
 {
     uint8_t buffer[2];
-
-    // Write register address
     int result = i2c_write_blocking(I2C_PORT, INA226_ADDRESS, &reg, 1, true);
-    if (result != 1)
-    {
-        return false;
-    }
-
-    // Read 2 bytes
+    if (result != 1) return false;
+    
     result = i2c_read_blocking(I2C_PORT, INA226_ADDRESS, buffer, 2, false);
-    if (result != 2)
-    {
-        return false;
-    }
-
-    // Combine bytes (MSB first)
+    if (result != 2) return false;
+    
     *value = (buffer[0] << 8) | buffer[1];
     return true;
 }
 
-
 bool ina226_calibrate(void)
 {
-    // Calculate Current_LSB
-    float current_lsb = MAX_EXPECTED_CURRENT / 32767.0;
-    current_lsb = 0.001; // Use 1mA per LSB for simplicity
-
-    // Calculate calibration register value
+    float current_lsb = 0.001; // 1mA per LSB
     float cal_value = 0.00512 / (current_lsb * SHUNT_RESISTOR_OHMS);
     uint16_t calibration_reg = (uint16_t)(cal_value + 0.5);
-
+    
     if (!ina226_write_register(INA226_REG_CALIBRATION, calibration_reg))
-    {
         return false;
-    }
-
-    printf("INA226: Calibrated - Shunt: %.1f mΩ, Current LSB: %.3f mA\n",
-           SHUNT_RESISTOR_OHMS * 1000, current_lsb * 1000);
-    printf("INA226: Calibration register: 0x%04X (%d)\n", calibration_reg, calibration_reg);
-
+        
+    printf("INA226: Calibrated - Current LSB: %.3f mA\n", current_lsb * 1000);
     return true;
 }
 
 void ina226_init(void)
 {
-    // Check manufacturer ID
     uint16_t manuf_id, die_id;
     ina226_read_register(INA226_REG_MANUF_ID, &manuf_id);
     ina226_read_register(INA226_REG_DIE_ID, &die_id);
-
+    
     ina226_write_register(INA226_REG_CONFIG, INA226_CONFIG_RESET);
     sleep_ms(100);
-
-    // Configuration: 16 averages, 1.1ms conversion times, continuous mode
+    
     uint16_t config = INA226_CONFIG_AVG_16 |
                       INA226_CONFIG_VBUSCT_1100US |
                       INA226_CONFIG_VSHCT_1100US |
                       INA226_CONFIG_MODE_SHUNT_BUS_CONT;
-
+    
     ina226_write_register(INA226_REG_CONFIG, config);
     ina226_calibrate();
 }
 
 bool ina226_read_all_data(void)
 {
-    // Read all measurement registers
     ina226_read_register(INA226_REG_SHUNT_V, &sensor_data.raw_shunt);
     ina226_read_register(INA226_REG_BUS_V, &sensor_data.raw_bus);
     ina226_read_register(INA226_REG_CURRENT, &sensor_data.raw_current);
-
-    // Shunt voltage (signed 16-bit value)
+    
     int16_t signed_shunt = (int16_t)sensor_data.raw_shunt;
     sensor_data.shunt_voltage_mv = signed_shunt * INA226_SHUNT_LSB_UV / 1000.0;
-
-    // Bus voltage (15-bit value, MSB is always 0)
+    
     sensor_data.bus_voltage_v = (sensor_data.raw_bus & 0x7FFF) * INA226_BUS_LSB_MV / 1000.0;
-
-    // Current (signed 16-bit value, 1mA per LSB)
+    
     int16_t signed_current = (int16_t)sensor_data.raw_current;
-    sensor_data.current_a =  0.0126408 + (signed_current * 0.001) * 1.21342; // poorly tuned tbh
-
+    sensor_data.current_a = 0.0126408 + (signed_current * 0.001) * 1.21342;
+    
     return true;
 }
 
-void ina226_print_data(void)
+void print_status(void)
 {
-    printf("I: %+7.3fA V: %6.3fV \n", sensor_data.current_a, sensor_data.bus_voltage_v);
+    printf("I: %+7.3fA V: %6.3fV | Sample: %d/4 | WBuf: %d | RBuf: %d | DMA: %s\n", 
+           sensor_data.current_a, sensor_data.bus_voltage_v, sample_count,
+           write_buffer, read_buffer, dma_busy ? "BUSY" : "IDLE");
+}
+
+// DMA completion callback
+void dma_complete_callback(void)
+{
+    buffers[read_buffer].being_transmitted = false;
+    buffers[read_buffer].ready_to_send = false;
+    dma_busy = false;
+    
+    gpio_set_function(PIN_TX, GPIO_FUNC_NULL);
+    printf("✓ Transmitted buffer %d\n", read_buffer);
 }
 
 void configure_dma()
 {
     data_chan = dma_claim_unused_channel(true);
     dma_channel_config c = dma_channel_get_default_config(data_chan);
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_8); // 8-bit txfers
-    channel_config_set_read_increment(&c, true);           // yes read incrementing
-    channel_config_set_write_increment(&c, false);         // no write incrementing
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
     channel_config_set_dreq(&c, DREQ_SPI0_TX);
 
     dma_channel_configure(
-        data_chan,                 // Channel to be configured
-        &c,                        // The configuration we just created
-        &spi_get_hw(SPI_PORT)->dr, // write address (SPI data register)
-        tx_data,                   // The initial read address
-        LEN,                       // Number of transfers
-        false                      // Don't start immediately.
+        data_chan,
+        &c,
+        &spi_get_hw(SPI_PORT)->dr,
+        NULL,        // Set dynamically
+        BUFFER_SIZE, // Always send full buffer
+        false
     );
+    
+    dma_channel_set_irq0_enabled(data_chan, true);
+    irq_set_exclusive_handler(DMA_IRQ_0, dma_complete_callback);
+    irq_set_enabled(DMA_IRQ_0, true);
+}
+
+void start_transmission(int buffer_idx)
+{
+    if (dma_busy || !buffers[buffer_idx].ready_to_send) return;
+    
+    buffers[buffer_idx].being_transmitted = true;
+    read_buffer = buffer_idx;
+    dma_busy = true;
+    
+    gpio_set_function(PIN_TX, GPIO_FUNC_SPI);
+    
+    // Always send full buffer (4 samples = 48 bytes)
+    dma_hw->ch[data_chan].read_addr = (uintptr_t)buffers[buffer_idx].tx_data;
+    dma_hw->ch[data_chan].transfer_count = BUFFER_SIZE;
+    dma_start_channel_mask(1u << data_chan);
+    
+    printf("→ Started transmission of buffer %d (%d bytes)\n", buffer_idx, BUFFER_SIZE);
+}
+
+void handle_transmission_request(void)
+{
+    if (!transmission_requested || dma_busy) return;
+    transmission_requested = false;
+    
+    // Find a ready buffer (prefer the one that's not being written to)
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        if (buffers[i].ready_to_send && !buffers[i].being_transmitted) {
+            start_transmission(i);
+            return;
+        }
+    }
+    
+    printf("⚠ No ready buffers for transmission\n");
+}
+
+void switch_buffer(void)
+{
+    // Mark current buffer as ready
+    buffers[write_buffer].ready_to_send = true;
+    printf("Buffer %d ready (4 samples)\n", write_buffer);
+    
+    // Switch to the other buffer
+    write_buffer = (write_buffer + 1) % NUM_BUFFERS;
+    sample_count = 0;
+    
+    // Clear the new buffer if it's not being transmitted
+    if (!buffers[write_buffer].being_transmitted) {
+        buffers[write_buffer].ready_to_send = false;
+        memset(buffers[write_buffer].tx_data, 0, BUFFER_SIZE);
+        printf("Switched to buffer %d\n", write_buffer);
+    } else {
+        printf("⚠ New buffer %d still being transmitted!\n", write_buffer);
+    }
 }
 
 void irq_handler(uint gpio, uint32_t events)
 {
-    if (events & GPIO_IRQ_EDGE_FALL)
-    {
-        gpio_set_function(PIN_TX, GPIO_FUNC_SPI);
-
-        dma_hw->ch[data_chan].read_addr = (uintptr_t)tx_data;
-        dma_start_channel_mask(1u << data_chan);
-
-        ina226_print_data();
-        
-        // printf("\nSent: ");
-        // for (int i = 0; i < LEN; i++)
-        // {
-        //     printf("%02X ", tx_data[i]);
-        // }
-    }
-    else if (events & GPIO_IRQ_EDGE_RISE)
-    {
-        gpio_set_function(PIN_TX, GPIO_FUNC_NULL); // Set pin to high-Z
+    if (events & GPIO_IRQ_EDGE_FALL) {
+        transmission_requested = true;
     }
 }
 
@@ -261,9 +297,12 @@ int initialize()
 {
     stdio_init_all();
 
+    // Initialize buffers
+    memset(buffers, 0, sizeof(buffers));
+    
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
-    gpio_put(LED_PIN, 1); 
+    gpio_put(LED_PIN, 1);
     
     i2c_init(I2C_PORT, I2C_FREQ);
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
@@ -271,28 +310,54 @@ int initialize()
     gpio_pull_up(SDA_PIN);
     gpio_pull_up(SCL_PIN);
 
-    spi_init(SPI_PORT, 1000 * 1000);  
-    spi_set_slave(SPI_PORT, true);   
+    spi_init(SPI_PORT, 1000 * 1000);
+    spi_set_slave(SPI_PORT, true);
     gpio_set_function(PIN_RX, GPIO_FUNC_SPI);
     gpio_set_function(PIN_TX, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
-    // gpio_set_function(PIN_CS, GPIO_FUNC_SPI);  
     spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_1, false);
 
     gpio_init(TRIGGER);
     gpio_set_dir(TRIGGER, GPIO_IN);
-    gpio_set_irq_enabled_with_callback(TRIGGER, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &irq_handler);
+    gpio_set_irq_enabled_with_callback(TRIGGER, GPIO_IRQ_EDGE_FALL, true, &irq_handler);
 
     ina226_init();
+    return 0;
 }
 
 int main()
 {
     initialize();
     configure_dma();
-    while (true) {        
+    
+    printf("Simple multi-buffer system:\n");
+    printf("- Read interval: %dms\n", READ_INTERVAL_MS);
+    printf("- Samples per transmission: %d\n", SAMPLES_PER_TRANSMISSION);
+    printf("- Transmission rate: %.1fHz\n", 1000.0 / (READ_INTERVAL_MS * SAMPLES_PER_TRANSMISSION));
+    printf("- Buffer size: %d bytes\n", BUFFER_SIZE);
+    printf("- Number of buffers: %d\n", NUM_BUFFERS);
+    
+    while (true) {
+        // Read sensor data
         ina226_read_all_data();
-        pack_all_sensor_data();
+        
+        // Pack sample into current buffer
+        pack_sample(buffers[write_buffer].tx_data, sample_count);
+        sample_count++;
+        
+        print_status();
+        
+        // Check if buffer is full (4 samples)
+        if (sample_count >= SAMPLES_PER_TRANSMISSION) {
+            switch_buffer();
+        }
+        
+        // Handle transmission requests
+        handle_transmission_request();
+        
+        // Fixed timing
+        sleep_ms(READ_INTERVAL_MS - 1);
     }
+    
     return 0;
 }
