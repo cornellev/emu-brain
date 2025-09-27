@@ -14,6 +14,8 @@ find_package(rosidl_default_generators REQUIRED)
 
 set(msg_files
   "msg/StrainGauge.msg"
+  "msg/PowerMonitor.msg"
+  "msg/MotorController.msg"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
