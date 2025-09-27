@@ -9,6 +9,8 @@
 #include <linux/spi/spidev.h>
 #include <pigpiod_if2.h>
 #include "spi_com/msg/strain_gauge.hpp"
+#include "spi_com/msg/power_monitor.hpp"
+#include "spi_com/msg/motor_controller.hpp"
 
 using namespace std::chrono_literals;
 
@@ -16,9 +18,10 @@ constexpr uint8_t SPI_MODE = 1;          // CPOL=0, CPHA=1
 constexpr uint32_t SPI_SPEED = 1000000;  // SPI speed (1 MHz)
 constexpr const char* SPI_DEVICE = "/dev/spidev0.0";
 
-#define GPIO_CS1 25         // CS1
-#define GPIO_CS2 27         // CS2
-#define GPIO_CS3 22         // CS3
+#define GPIO_CS1 25
+#define GPIO_CS2 27
+#define GPIO_CS3 22
+#define GPIO_CS4 24 
 
 class SPINode : public rclcpp::Node {
 public:
@@ -36,10 +39,12 @@ public:
         set_mode(pi_, GPIO_CS1, PI_OUTPUT);
         set_mode(pi_, GPIO_CS2, PI_OUTPUT);
         set_mode(pi_, GPIO_CS3, PI_OUTPUT);
+        set_mode(pi_, GPIO_CS4, PI_OUTPUT);
 
         gpio_write(pi_, GPIO_CS1, 1);
         gpio_write(pi_, GPIO_CS2, 1);
         gpio_write(pi_, GPIO_CS3, 1);
+        gpio_write(pi_, GPIO_CS4, 1);
         
         // Open SPI device
         spi_fd_ = open(SPI_DEVICE, O_RDWR);
@@ -66,6 +71,8 @@ public:
 
         mech_pub1_ = this->create_publisher<spi_com::msg::StrainGauge>("strain_gauge_123", 1);
         mech_pub2_ = this->create_publisher<spi_com::msg::StrainGauge>("strain_gauge_456", 1);
+        power_pub_ = this->create_publisher<spi_com::msg::PowerMonitor>("power_monitor", 1);
+        motor_pub_ = this->create_publisher<spi_com::msg::MotorController>("motor_controller", 1);
         timer_ = this->create_wall_timer(std::chrono::microseconds(500), std::bind(&SPINode::timer_callback, this));
     }
 
@@ -81,16 +88,30 @@ public:
 private:
     rclcpp::Publisher<spi_com::msg::StrainGauge>::SharedPtr mech_pub1_;
     rclcpp::Publisher<spi_com::msg::StrainGauge>::SharedPtr mech_pub2_;
+    rclcpp::Publisher<spi_com::msg::PowerMonitor>::SharedPtr power_pub_;
+    rclcpp::Publisher<spi_com::msg::MotorController>::SharedPtr motor_pub_;
     int spi_fd_;
     int pi_{-1};
     rclcpp::TimerBase::SharedPtr timer_;
 
-    std::vector<uint8_t> readData(int chipSelect)
+    float unpack_float(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3) {
+        uint32_t bits = ((uint32_t)b3 << 24) |
+                        ((uint32_t)b2 << 16) |
+                        ((uint32_t)b1 << 8)  |
+                        ((uint32_t)b0);
+
+        float result;
+        std::memcpy(&result, &bits, sizeof(result)); // safest, strict-aliasing-compliant
+        return result;
+    }
+
+    std::vector<uint8_t> readData(int chipSelect, int len)
     {
 
         gpio_write(pi_, GPIO_CS1, chipSelect == 1 ? 0 : 1);
         gpio_write(pi_, GPIO_CS2, chipSelect == 2 ? 0 : 1);
         gpio_write(pi_, GPIO_CS3, chipSelect == 3 ? 0 : 1);
+        gpio_write(pi_, GPIO_CS4, chipSelect == 4 ? 0 : 1);
 
         std::vector<uint8_t> tx(10, 0x00);  
         std::vector<uint8_t> rx(10, 0x00);  
@@ -99,7 +120,7 @@ private:
         struct spi_ioc_transfer transfer = {};
         transfer.tx_buf = reinterpret_cast<unsigned long>(tx.data());
         transfer.rx_buf = reinterpret_cast<unsigned long>(rx.data());
-        transfer.len = 11;  
+        transfer.len = len;  
         transfer.speed_hz = SPI_SPEED;
         transfer.bits_per_word = 8;
 
@@ -110,21 +131,25 @@ private:
         gpio_write(pi_, GPIO_CS1, 1);
         gpio_write(pi_, GPIO_CS2, 1);
         gpio_write(pi_, GPIO_CS3, 1);
-
-        return rx;
+        gpio_write(pi_, GPIO_CS4, 1);
 
         // RCLCPP_INFO(this->get_logger(), "Received SPI data: ");
         // for (int i = 0; i < 10; ++i)
         // {
         //     RCLCPP_INFO(this->get_logger(), "0x%02X", rx[i]);
         // }
+
+        return rx;
     }
 
     // Timer callback to periodically read from the SPI device
     void timer_callback() {
-        std::vector<uint8_t> p1 = readData(1); 
-        std::vector<uint8_t> p2 = readData(2);
-        // std::vector<uint8_t> p3 = readData(3);
+
+        // len is 12 for power monitor, 10 for strain gauge
+        std::vector<uint8_t> p1 = readData(1, 10); 
+        std::vector<uint8_t> p2 = readData(2, 10);
+        std::vector<uint8_t> p3 = readData(3, 12);
+        std::vector<uint8_t> p4 = readData(4, 12);
 
         uint32_t timestamp = 0;
         uint16_t adc1 = 0;
@@ -133,11 +158,15 @@ private:
         uint16_t adc4 = 0;
         uint16_t adc5 = 0;
         uint16_t adc6 = 0;
+        float current = 0;
+        float voltage = 0;
+        float throttle = 0;
+        float velocity = 0;
 
-        timestamp = (p1[4]) | (p1[3] << 8) | (p1[2] << 16) | (p1[1] << 24);
-        adc1 = (p1[6]) | (p1[5] << 8);
-        adc2 = (p1[8]) | (p1[7] << 8);
-        adc3 = (p1[10]) | (p1[9] << 8);
+        timestamp = (p1[3]) | (p1[2] << 8) | (p1[1] << 16) | (p1[0] << 24);
+        adc1 = (p1[5]) | (p1[4] << 8);
+        adc2 = (p1[7]) | (p1[6] << 8);
+        adc3 = (p1[9]) | (p1[8] << 8);
         auto m1 = spi_com::msg::StrainGauge();
         m1.timestamp = timestamp;
         m1.sensor1 = adc1;
@@ -145,10 +174,10 @@ private:
         m1.sensor3 = adc3;
         mech_pub1_->publish(m1);
 
-        timestamp = (p2[4]) | (p2[3] << 8) | (p2[2] << 16) | (p2[1] << 24);
-        adc4 = (p2[6]) | (p2[5] << 8);
-        adc5 = (p2[8]) | (p2[7] << 8);
-        adc6 = (p2[10]) | (p2[9] << 8);
+        timestamp = (p2[3]) | (p2[2] << 8) | (p2[1] << 16) | (p2[0] << 24);
+        adc4 = (p2[5]) | (p2[4] << 8);
+        adc5 = (p2[7]) | (p2[6] << 8);
+        adc6 = (p2[9]) | (p2[8] << 8);
         auto m2 = spi_com::msg::StrainGauge();
         m2.timestamp = timestamp;
         m2.sensor4 = adc4;
@@ -156,9 +185,28 @@ private:
         m2.sensor6 = adc6;
         mech_pub2_->publish(m2);
 
-        // RCLCPP_INFO(this->get_logger(), "Received SPI data:");
-        // for (int i = 0; i < 11; i++){
-        //     RCLCPP_INFO(this->get_logger(), "0x%02X", p2[i]);
+        timestamp = (p3[3]) | (p3[2] << 8) | (p3[1] << 16) | (p3[0] << 24);
+        current = unpack_float(p3[4], p3[5], p3[6], p3[7]);
+        voltage = unpack_float(p3[8], p3[9], p3[10], p3[11]);
+        auto m3 = spi_com::msg::PowerMonitor();
+        m3.timestamp = timestamp;
+        m3.voltage = voltage;
+        m3.current = current;
+        power_pub_->publish(m3);
+
+        timestamp = (p4[3]) | (p4[2] << 8) | (p4[1] << 16) | (p4[0] << 24);
+        throttle = unpack_float(p4[4], p4[5], p4[6], p4[7]);
+        velocity = unpack_float(p4[8], p4[9], p4[10], p4[11]);
+        auto m4 = spi_com::msg::MotorController();
+        m4.timestamp = timestamp;
+        m4.throttle = throttle;
+        m4.velocity = velocity;
+        motor_pub_->publish(m4);
+
+        // RCLCPP_INFO(this->get_logger(), "Received SPI data: %d\t%f\t%f", timestamp1, voltage, current);
+        // RCLCPP_INFO(this->get_logger(), "Received: ");
+        // for (int i = 0; i < 12; i++){
+        //     RCLCPP_INFO(this->get_logger(), "0x%02X", p1[i]);
         // }
         // RCLCPP_INFO(this->get_logger(), "Timestamp: %u", timestamp);
         // RCLCPP_INFO(this->get_logger(), "ADC4: %u", adc4);  
