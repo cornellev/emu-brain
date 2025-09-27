@@ -32,7 +32,7 @@ int data_chan ;
 
 // Hall sensor inputs
 #define NUM_INPUTS 3
-const uint input_pins[NUM_INPUTS] = {13, 14, 15};
+const uint input_pins[NUM_INPUTS] = {2, 3, 4};
 
 const uint pwm_pins[2] = {6, 10};
 uint pwm_slices[2] ;
@@ -238,8 +238,8 @@ void initialize()
         gpio_set_dir(dir_pins[i], GPIO_OUT);
     }
 
-    gpio_put(dir_pins[0], 0);
-    gpio_put(dir_pins[1], 1);
+    gpio_put(dir_pins[0], 1);
+    gpio_put(dir_pins[1], 0);
 
     for (int i = 0; i < NUM_INPUTS; i++)
     {
@@ -271,8 +271,8 @@ int main()
 
         // Calculate duty cycle
         float duty = throttle * (motor_rpm / RATED_MOTOR_RPM + MAX_VOLTAGE_AT_STALL / RATED_MOTOR_VOLTAGE);
-        uint64_t ms = time_us_64() / 1000;
-        // printf("%u,%.5f,%.5f\n", ms, throttle, motor_rpm);
+        // uint64_t ms = time_us_64() / 1000;
+        printf("%.5f\t%.5f\n", throttle, motor_rpm);
 
         // Write float to PWM output
         pwm_set_chan_level(pwm_slices[0], PWM_CHAN_A, duty_cycle_to_level(duty));
