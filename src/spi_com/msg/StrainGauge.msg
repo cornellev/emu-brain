@@ -5,3 +5,6 @@ uint16 sensor3
 uint16 sensor4 
 uint16 sensor5 
 uint16 sensor6 
+uint16 sensor7
+uint16 sensor8
+uint16 sensor9
