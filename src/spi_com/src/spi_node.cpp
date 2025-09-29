@@ -182,7 +182,7 @@ private:
 
         uint8_t current_first = rx[0];
         int diff = __builtin_popcount(current_first ^ last_first_byte_);
-        if (diff > 1) {
+        if (diff > 1 || (current_first == 0x00 && last_first_byte_ != 0x00)) {
             RCLCPP_WARN(this->get_logger(), "Bit difference in first byte too large (diff = %d)", diff);
             flushBytes(chipSelect, len);
             // return std::vector<uint8_t>(len, 0);
