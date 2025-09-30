@@ -315,3 +315,21 @@ int main()
     }
     return 0;
 }
+
+/*
+TODO:
+- Handle DMA completion interrupt to clear dma_busy flag
+- Configure IRQ to trigger the DMA transfer
+- Do not arbitrarily choose the sample rate, please use the maximum sample rate the INA226 can provide
+- You can assume 500Hz for SPI requests
+- Add set_gpio_hi_z function when chip select returns high
+- You don't call your functions!! Add a protothread that samples the INA226 at max rate using the 
+  ina226_read_register() function and adds it to the appropriate buffer. 
+- I don't see the purpose of the handle_transmission_request function. You only have two buffers. 
+  You have a flag that determines which buffer is actively being written to, so you know which one
+  you need to read.
+
+Overall the logic looks great guys :) just a few fixes before we can test it!
+Beyond the buffer stuff, you guys should add start/end byte(s) for each buffer. 
+Next work session we will try to integrate with ROS as well!
+*/
