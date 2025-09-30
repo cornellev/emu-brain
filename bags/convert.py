@@ -23,7 +23,7 @@ def main():
 
     # Load topics
     topics = pd.read_sql_query("SELECT id, name, type FROM topics", conn)
-    topic_info = topics[topics["name"] == "/strain_gauge_456"].iloc[0]
+    topic_info = topics[topics["name"] == "/strain_gauge_789"].iloc[0]
     topic_id, topic_type = topic_info["id"], topic_info["type"]
 
     if topic_type != "spi_com/msg/StrainGauge":
@@ -48,9 +48,9 @@ def main():
             "timestamp": deserialized.timestamp,
             # "voltage": deserialized.voltage,
             # "current": deserialized.current,
-            "strain_gauge_4": deserialized.sensor1,
-            "strain_gauge_5": deserialized.sensor2,
-            "strain_gauge_6": deserialized.sensor3,
+            "strain_gauge_7": deserialized.sensor7,
+            "strain_gauge_8": deserialized.sensor8,
+            "strain_gauge_9": deserialized.sensor9,
         })
 
     df = pd.DataFrame(rows)
