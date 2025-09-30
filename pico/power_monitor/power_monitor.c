@@ -82,10 +82,11 @@ typedef struct {
     bool being_transmitted;
 } buffer_t;
 
-// Global variables
-static buffer_t buffers[NUM_BUFFERS];
-static int write_buffer = 0;    // Which buffer we're writing to
-static int read_buffer = 0;     // Which buffer to transmit
+// Vars for managing buffers
+static buffer_t tx_buffers[NUM_BUFFERS];
+static int write_buffer = 0;    // Index of buffer we're writing to (read from sensor)
+static int read_buffer = 0;     // Index of buffer to transmitting to Pi
+
 static int sample_count = 0;    // How many samples in current buffer
 static volatile bool transmission_requested = false;
 static volatile bool dma_busy = false;
@@ -93,7 +94,7 @@ static volatile bool dma_busy = false;
 static int data_chan;
 static ina226_data_t sensor_data;
 
-// Simple packing functions
+// Pack time data to buffer
 void pack_data_time(uint8_t *buffer, int offset)
 {
     uint32_t now_us = (uint32_t)time_us_64();
@@ -103,6 +104,7 @@ void pack_data_time(uint8_t *buffer, int offset)
     buffer[offset + 3] = (now_us >> 0) & 0xFF;
 }
 
+// Pack float-specific data to buffer
 void pack_data_float(uint8_t *buffer, int offset, float data)
 {
     uint8_t *p = (uint8_t *)&data;
@@ -111,6 +113,7 @@ void pack_data_float(uint8_t *buffer, int offset, float data)
     }
 }
 
+// Pack all data to buffer (one sample)
 void pack_sample(uint8_t *buffer, int sample_index)
 {
     int offset = sample_index * SAMPLE_SIZE;
@@ -133,13 +136,13 @@ bool ina226_write_register(uint8_t reg, uint16_t value)
 bool ina226_read_register(uint8_t reg, uint16_t *value)
 {
     uint8_t buffer[2];
-    int result = i2c_write_blocking(I2C_PORT, INA226_ADDRESS, &reg, 1, true);
+    int result = i2c_write_blocking(I2C_PORT, INA226_ADDRESS, &reg, 1, true); // Write data to initiate read
     if (result != 1) return false;
     
-    result = i2c_read_blocking(I2C_PORT, INA226_ADDRESS, buffer, 2, false);
+    result = i2c_read_blocking(I2C_PORT, INA226_ADDRESS, buffer, 2, false); // Read data populated into temporary buffer
     if (result != 2) return false;
     
-    *value = (buffer[0] << 8) | buffer[1];
+    *value = (buffer[0] << 8) | buffer[1]; // Sensor value extracted from temporary buffer
     return true;
 }
 
@@ -176,6 +179,7 @@ void ina226_init(void)
 
 bool ina226_read_all_data(void)
 {
+    // Read from specified registers on INA226
     ina226_read_register(INA226_REG_SHUNT_V, &sensor_data.raw_shunt);
     ina226_read_register(INA226_REG_BUS_V, &sensor_data.raw_bus);
     ina226_read_register(INA226_REG_CURRENT, &sensor_data.raw_current);
@@ -198,16 +202,19 @@ void print_status(void)
            write_buffer, read_buffer, dma_busy ? "BUSY" : "IDLE");
 }
 
-// DMA completion callback
-void dma_complete_callback(void)
+// Return transmitted data
+uint8_t* create_data_sent(void)
 {
-    buffers[read_buffer].being_transmitted = false;
-    buffers[read_buffer].ready_to_send = false;
-    dma_busy = false;
+    tx_buffers[write_buffer].ready_to_send = false;
+    tx_buffers[write_buffer].being_transmitted = false;
+
+    int8_t* data_ptr = tx_buffers[write_buffer].tx_data;
+    write_buffer = (write_buffer + 1) % NUM_BUFFERS; // Switch to next buffer (:D flip-flop)
+    sample_count = 0; // Reset sample count for new buffer
     
-    gpio_set_function(PIN_TX, GPIO_FUNC_NULL);
-    printf("✓ Transmitted buffer %d\n", read_buffer);
+    return data_ptr;
 }
+
 
 void configure_dma()
 {
@@ -222,28 +229,24 @@ void configure_dma()
         data_chan,
         &c,
         &spi_get_hw(SPI_PORT)->dr,
-        NULL,        // Set dynamically
-        BUFFER_SIZE, // Always send full buffer
+        create_data_sent(),        // Set dynamically
+        BUFFER_SIZE, // Alwa; pointer of ys send full buffer
         false
     );
-    
-    dma_channel_set_irq0_enabled(data_chan, true);
-    irq_set_exclusive_handler(DMA_IRQ_0, dma_complete_callback);
-    irq_set_enabled(DMA_IRQ_0, true);
 }
 
 void start_transmission(int buffer_idx)
 {
-    if (dma_busy || !buffers[buffer_idx].ready_to_send) return;
+    if (dma_busy || !tx_buffers[buffer_idx].ready_to_send) return;
     
-    buffers[buffer_idx].being_transmitted = true;
+    tx_buffers[buffer_idx].being_transmitted = true;
     read_buffer = buffer_idx;
     dma_busy = true;
     
     gpio_set_function(PIN_TX, GPIO_FUNC_SPI);
     
     // Always send full buffer (4 samples = 48 bytes)
-    dma_hw->ch[data_chan].read_addr = (uintptr_t)buffers[buffer_idx].tx_data;
+    dma_hw->ch[data_chan].read_addr = (uintptr_t)tx_buffers[buffer_idx].tx_data;
     dma_hw->ch[data_chan].transfer_count = BUFFER_SIZE;
     dma_start_channel_mask(1u << data_chan);
     
@@ -257,33 +260,13 @@ void handle_transmission_request(void)
     
     // Find a ready buffer (prefer the one that's not being written to)
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        if (buffers[i].ready_to_send && !buffers[i].being_transmitted) {
+        if (tx_buffers[i].ready_to_send && !tx_buffers[i].being_transmitted) {
             start_transmission(i);
             return;
         }
     }
     
     printf("⚠ No ready buffers for transmission\n");
-}
-
-void switch_buffer(void)
-{
-    // Mark current buffer as ready
-    buffers[write_buffer].ready_to_send = true;
-    printf("Buffer %d ready (4 samples)\n", write_buffer);
-    
-    // Switch to the other buffer
-    write_buffer = (write_buffer + 1) % NUM_BUFFERS;
-    sample_count = 0;
-    
-    // Clear the new buffer if it's not being transmitted
-    if (!buffers[write_buffer].being_transmitted) {
-        buffers[write_buffer].ready_to_send = false;
-        memset(buffers[write_buffer].tx_data, 0, BUFFER_SIZE);
-        printf("Switched to buffer %d\n", write_buffer);
-    } else {
-        printf("⚠ New buffer %d still being transmitted!\n", write_buffer);
-    }
 }
 
 void irq_handler(uint gpio, uint32_t events)
@@ -297,12 +280,9 @@ int initialize()
 {
     stdio_init_all();
 
-    // Initialize buffers
-    memset(buffers, 0, sizeof(buffers));
-    
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
-    gpio_put(LED_PIN, 1);
+    gpio_put(LED_PIN, 1); 
     
     i2c_init(I2C_PORT, I2C_FREQ);
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
@@ -310,54 +290,28 @@ int initialize()
     gpio_pull_up(SDA_PIN);
     gpio_pull_up(SCL_PIN);
 
-    spi_init(SPI_PORT, 1000 * 1000);
-    spi_set_slave(SPI_PORT, true);
+    spi_init(SPI_PORT, 1000 * 1000);  
+    spi_set_slave(SPI_PORT, true);   
     gpio_set_function(PIN_RX, GPIO_FUNC_SPI);
     gpio_set_function(PIN_TX, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
+    // gpio_set_function(PIN_CS, GPIO_FUNC_SPI);  
     spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_1, false);
 
     gpio_init(TRIGGER);
     gpio_set_dir(TRIGGER, GPIO_IN);
-    gpio_set_irq_enabled_with_callback(TRIGGER, GPIO_IRQ_EDGE_FALL, true, &irq_handler);
+    gpio_set_irq_enabled_with_callback(TRIGGER, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &irq_handler);
 
     ina226_init();
-    return 0;
 }
 
 int main()
 {
     initialize();
     configure_dma();
-    
-    printf("Simple multi-buffer system:\n");
-    printf("- Read interval: %dms\n", READ_INTERVAL_MS);
-    printf("- Samples per transmission: %d\n", SAMPLES_PER_TRANSMISSION);
-    printf("- Transmission rate: %.1fHz\n", 1000.0 / (READ_INTERVAL_MS * SAMPLES_PER_TRANSMISSION));
-    printf("- Buffer size: %d bytes\n", BUFFER_SIZE);
-    printf("- Number of buffers: %d\n", NUM_BUFFERS);
-    
-    while (true) {
-        // Read sensor data
+    while (true) {        
         ina226_read_all_data();
-        
-        // Pack sample into current buffer
-        pack_sample(buffers[write_buffer].tx_data, sample_count);
-        sample_count++;
-        
-        print_status();
-        
-        // Check if buffer is full (4 samples)
-        if (sample_count >= SAMPLES_PER_TRANSMISSION) {
-            switch_buffer();
-        }
-        
-        // Handle transmission requests
-        handle_transmission_request();
-        
-        // Fixed timing
-        sleep_ms(READ_INTERVAL_MS - 1);
+        pack_all_sensor_data();
     }
-    
     return 0;
 }
