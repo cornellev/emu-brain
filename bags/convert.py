@@ -10,7 +10,7 @@ def main():
     rclpy.init()
 
     if len(sys.argv) < 3:
-        print("Usage: python3 extract_electrical_state.py <path_to_db3> <output_csv>")
+        print("Usage: python3 convert.py <path_to_db3> <output_csv>")
         sys.exit(1)
 
     db_path = sys.argv[1]
@@ -23,11 +23,11 @@ def main():
 
     # Load topics
     topics = pd.read_sql_query("SELECT id, name, type FROM topics", conn)
-    topic_info = topics[topics["name"] == "/electrical_state"].iloc[0]
+    topic_info = topics[topics["name"] == "/strain_gauge_456"].iloc[0]
     topic_id, topic_type = topic_info["id"], topic_info["type"]
 
-    if topic_type != "i2c_com/msg/ElectricalState":
-        raise ValueError(f"Topic /electrical_state has type {topic_type}, expected i2c_com/msg/ElectricalState")
+    if topic_type != "spi_com/msg/StrainGauge":
+        raise ValueError(f"Topic has type {topic_type}, expected spi_com/msg/StrainGauge")
 
     # Load all messages for this topic
     query = f"SELECT timestamp, data FROM messages WHERE topic_id={topic_id}"
@@ -40,15 +40,17 @@ def main():
     for _, msg in messages.iterrows():
         deserialized = deserialize_message(msg["data"], msg_type)
 
-        ros_time_sec = deserialized.header.stamp.sec + deserialized.header.stamp.nanosec * 1e-9
+        # ros_time_sec = deserialized.header.stamp.sec + deserialized.header.stamp.nanosec * 1e-9
 
         rows.append({
-            "ros_time_sec": ros_time_sec,
-            "frame_id": deserialized.header.frame_id,
-            "bus_voltage": deserialized.bus_voltage,
-            "shunt_voltage": deserialized.shunt_voltage,
-            "current": deserialized.current,
-            "power": deserialized.power,
+            # "ros_time_sec": ros_time_sec,
+            # "frame_id": deserialized.header.frame_id,
+            "timestamp": deserialized.timestamp,
+            # "voltage": deserialized.voltage,
+            # "current": deserialized.current,
+            "strain_gauge_4": deserialized.sensor1,
+            "strain_gauge_5": deserialized.sensor2,
+            "strain_gauge_6": deserialized.sensor3,
         })
 
     df = pd.DataFrame(rows)
