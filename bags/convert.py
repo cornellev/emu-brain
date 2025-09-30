@@ -23,11 +23,11 @@ def main():
 
     # Load topics
     topics = pd.read_sql_query("SELECT id, name, type FROM topics", conn)
-    topic_info = topics[topics["name"] == "/power_monitor"].iloc[0]
+    topic_info = topics[topics["name"] == "/strain_gauge_456"].iloc[0]
     topic_id, topic_type = topic_info["id"], topic_info["type"]
 
-    if topic_type != "spi_com/msg/PowerMonitor":
-        raise ValueError(f"Topic /power_monitor has type {topic_type}, expected spi_com/msg/PowerMonitor")
+    if topic_type != "spi_com/msg/StrainGauge":
+        raise ValueError(f"Topic has type {topic_type}, expected spi_com/msg/StrainGauge")
 
     # Load all messages for this topic
     query = f"SELECT timestamp, data FROM messages WHERE topic_id={topic_id}"
@@ -46,8 +46,11 @@ def main():
             # "ros_time_sec": ros_time_sec,
             # "frame_id": deserialized.header.frame_id,
             "timestamp": deserialized.timestamp,
-            "voltage": deserialized.voltage,
-            "current": deserialized.current,
+            # "voltage": deserialized.voltage,
+            # "current": deserialized.current,
+            "strain_gauge_4": deserialized.sensor1,
+            "strain_gauge_5": deserialized.sensor2,
+            "strain_gauge_6": deserialized.sensor3,
         })
 
     df = pd.DataFrame(rows)
