@@ -236,10 +236,8 @@ void initialize()
 
         gpio_init(dir_pins[i]);
         gpio_set_dir(dir_pins[i], GPIO_OUT);
+        gpio_put(dir_pins[i], 1);
     }
-
-    gpio_put(dir_pins[0], 1);
-    gpio_put(dir_pins[1], 0);
 
     for (int i = 0; i < NUM_INPUTS; i++)
     {
@@ -272,7 +270,7 @@ int main()
         // Calculate duty cycle
         float duty = throttle * (motor_rpm / RATED_MOTOR_RPM + MAX_VOLTAGE_AT_STALL / RATED_MOTOR_VOLTAGE);
         // uint64_t ms = time_us_64() / 1000;
-        printf("%.5f\t%.5f\n", throttle, motor_rpm);
+        // printf("%.5f\t%.5f\n", throttle, motor_rpm);
 
         // Write float to PWM output
         pwm_set_chan_level(pwm_slices[0], PWM_CHAN_A, duty_cycle_to_level(duty));

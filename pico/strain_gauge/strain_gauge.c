@@ -58,10 +58,10 @@ void irq_handler(uint gpio, uint32_t events) {
         dma_hw->ch[data_chan].read_addr = (uintptr_t)tx_data;
         dma_start_channel_mask(1u << data_chan);
 
-        // printf("\nSent: ");
-        // for (int i = 0; i < LEN; i++) {
-        //     printf("%02X ", tx_data[i]);
-        // }
+        printf("\nSent: ");
+        for (int i = 0; i < LEN; i++) {
+            printf("%02X ", tx_data[i]);
+        }
     } else if (events & GPIO_IRQ_EDGE_RISE) {
         // printf("here\n");
         set_gpio_hi_z(PIN_TX);
