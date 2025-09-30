@@ -254,7 +254,7 @@ def analyze_timestamp_linearity(df: pd.DataFrame,
 # Example usage
 if __name__ == "__main__":
     # Load the corrected data
-    df = pd.read_csv('strain_gauge_123_corrected.csv')
+    df = pd.read_csv('strain_gauge_789_corrected.csv')
     
     print(f"Loaded {len(df):,} rows from corrected data\n")
     

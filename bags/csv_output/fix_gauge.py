@@ -224,7 +224,7 @@ def correct_bitshift(df: pd.DataFrame,
 # Example usage
 if __name__ == "__main__":
     # Load data
-    df = pd.read_csv('strain_gauge_123.csv')
+    df = pd.read_csv('strain_gauge_789.csv')
     
     print(f"Loaded {len(df):,} rows\n")
     
@@ -243,9 +243,9 @@ if __name__ == "__main__":
     rows_removed = rows_before - len(df_corrected)
     
     # Save results
-    df_corrected.to_csv('strain_gauge_123_corrected.csv', index=False)
+    df_corrected.to_csv('strain_gauge_789_corrected.csv', index=False)
     print(f"\n{'='*70}")
-    print(f"✓ Corrected data saved to 'strain_gauge_123_corrected.csv'")
+    print(f"✓ Corrected data saved to 'strain_gauge_789_corrected.csv'")
     if rows_removed > 0:
         print(f"  Removed {rows_removed:,} rows with zero timestamps")
     print(f"{'='*70}\n")
