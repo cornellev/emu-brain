@@ -20,7 +20,7 @@
 #define I2C_PORT i2c1
 #define SDA_PIN 2
 #define SCL_PIN 3
-#define I2C_FREQ 400000
+#define I2C_FREQ 1000 * 1000 // set to 1MHz (Fastmode Plus for RP2040?)
 
 // INA226 Default I2C Address (A1=GND, A0=GND)
 #define INA226_ADDRESS 0x40
@@ -38,10 +38,17 @@
 #define INA226_REG_DIE_ID 0xFF
 
 // Configuration values
-#define INA226_CONFIG_RESET 0x8000
-#define INA226_CONFIG_AVG_16 0x0400
-#define INA226_CONFIG_VBUSCT_1100US 0x0100
-#define INA226_CONFIG_VSHCT_1100US 0x0020
+// #define INA226_CONFIG_RESET 0x8000
+// #define INA226_CONFIG_AVG_16 0x0400
+// #define INA226_CONFIG_VBUSCT_1100US 0x0100
+// #define INA226_CONFIG_VSHCT_1100US 0x0020
+
+// Changed to fastest conversion times
+#define INA226_CONFIG_RESET             0x8000
+#define INA226_CONFIG_AVG_1             0x0000  // no averaging
+#define INA226_CONFIG_VBUSCT_140US      0x0000  // fastest bus conv time
+#define INA226_CONFIG_VSHCT_140US       0x0000  // fastest shunt conv time
+#define INA226_CONFIG_MODE_SHUNT_CONT   0x0005  // shunt only, continuous
 #define INA226_CONFIG_MODE_SHUNT_BUS_CONT 0x0007
 
 // Constants for calculations
@@ -79,7 +86,7 @@ typedef struct
 typedef struct {
     uint8_t tx_data[BUFFER_SIZE];
     bool ready_to_send;
-    bool being_transmitted;
+    bool being_transmitted; 
 } buffer_t;
 
 // Vars for managing buffers
@@ -87,13 +94,18 @@ static buffer_t tx_buffers[NUM_BUFFERS];
 static int write_buffer = 0;    // Index of buffer we're writing to (read from sensor)
 static int read_buffer = 0;     // Index of buffer to transmitting to Pi
 
-static int sample_count = 0;    // How many samples in current buffer
+static int sample_count = 0;    // How many samples in current writing buffer
 static volatile bool transmission_requested = false;
 static volatile bool dma_busy = false;
 
 static int data_chan;
 static ina226_data_t sensor_data;
 
+void set_gpio_hi_z(uint pin) {
+    io_bank0_hw->io[pin].ctrl = (io_bank0_hw->io[pin].ctrl & ~IO_BANK0_GPIO0_CTRL_OEOVER_BITS) | (IO_BANK0_GPIO0_CTRL_OEOVER_VALUE_DISABLE << IO_BANK0_GPIO0_CTRL_OEOVER_LSB);
+}
+
+/** Helpers for packing a type to buffer */
 // Pack time data to buffer
 void pack_data_time(uint8_t *buffer, int offset)
 {
@@ -113,16 +125,37 @@ void pack_data_float(uint8_t *buffer, int offset, float data)
     }
 }
 
-// Pack all data to buffer (one sample)
+
+// Pack ONE sample data to buffer (one sample)
 void pack_sample(uint8_t *buffer, int sample_index)
 {
     int offset = sample_index * SAMPLE_SIZE;
     pack_data_time(buffer, offset);
     pack_data_float(buffer, offset + 4, sensor_data.current_a);
     pack_data_float(buffer, offset + 8, sensor_data.bus_voltage_v);
+    sample_count++; 
 }
 
-// INA226 functions (unchanged)
+// 
+void pack_all_sensor_data() {
+    while (True) {
+        if (sample_count >= SAMPLES_PER_TRANSMISSION) {
+            tx_buffers[write_buffer].ready_to_send = true; 
+            tx_buffers[write_buffer].being_transmitted = false;      
+
+            // Switch to new buffer if filled current write_buffer
+            write_buffer = (write_buffer + 1) % NUM_BUFFERS;     
+            sample_count = 0; 
+        }
+        ina226_read_all_data();
+        if (tx_buffers[write_buffer].ready_to_send != true) { // Do not write into a buffer that is still queued to send
+            pack_sample(tx_buffers[write_buffer].tx_data, sample_count);
+        }
+        
+    }
+}
+
+// HELPER INA226 FUNCTIONS (unchanged)
 bool ina226_write_register(uint8_t reg, uint16_t value)
 {
     uint8_t buffer[3];
@@ -168,9 +201,9 @@ void ina226_init(void)
     ina226_write_register(INA226_REG_CONFIG, INA226_CONFIG_RESET);
     sleep_ms(100);
     
-    uint16_t config = INA226_CONFIG_AVG_16 |
-                      INA226_CONFIG_VBUSCT_1100US |
-                      INA226_CONFIG_VSHCT_1100US |
+    uint16_t config = INA226_CONFIG_AVG_1 |
+                      INA226_CONFIG_VBUSCT_140US |
+                      INA226_CONFIG_VSHCT_140US |
                       INA226_CONFIG_MODE_SHUNT_BUS_CONT;
     
     ina226_write_register(INA226_REG_CONFIG, config);
@@ -179,8 +212,8 @@ void ina226_init(void)
 
 bool ina226_read_all_data(void)
 {
-    // Read from specified registers on INA226
-    ina226_read_register(INA226_REG_SHUNT_V, &sensor_data.raw_shunt);
+    // Read from specified registers on INA226, store into sensor_data
+    ina226_read_register(INA226_REG_SHUNT_V, &sensor_data.raw_shunt); 
     ina226_read_register(INA226_REG_BUS_V, &sensor_data.raw_bus);
     ina226_read_register(INA226_REG_CURRENT, &sensor_data.raw_current);
     
@@ -230,7 +263,7 @@ void configure_dma()
         &c,
         &spi_get_hw(SPI_PORT)->dr,
         create_data_sent(),        // Set dynamically
-        BUFFER_SIZE, // Alwa; pointer of ys send full buffer
+        BUFFER_SIZE, 
         false
     );
 }
@@ -249,6 +282,9 @@ void start_transmission(int buffer_idx)
     dma_hw->ch[data_chan].read_addr = (uintptr_t)tx_buffers[buffer_idx].tx_data;
     dma_hw->ch[data_chan].transfer_count = BUFFER_SIZE;
     dma_start_channel_mask(1u << data_chan);
+
+    // Clear flag for the sent buffer.
+    tx_buffers[buffer_idx].ready_to_send = false;
     
     printf("→ Started transmission of buffer %d (%d bytes)\n", buffer_idx, BUFFER_SIZE);
 }
@@ -271,9 +307,39 @@ void handle_transmission_request(void)
 
 void irq_handler(uint gpio, uint32_t events)
 {
-    if (events & GPIO_IRQ_EDGE_FALL) {
+    if (events & GPIO_IRQ_EDGE_FALL) { // Falling edge triggered.
         transmission_requested = true;
+
+        gpio_set_function(PIN_TX, GPIO_FUNC_SPI);
+        handle_transmission_request();
     }
+    else if (events & GPIO_IRQ_EDGE_RISE) { 
+        set_gpio_hi_z(PIN_TX); // manual set GPIO high
+    }
+}
+
+
+/** DMA Interrupt Functions */
+
+void __isr dma_irq_handler(void) {
+    uint32_t fired = dma_hw->ints0;
+
+    if (fired & (1u << data_chan)) {
+        dma_hw->ints0 = (1u << data_chan);   // clear the interrupt source bit
+        dma_busy = false;            
+        tx_buffers[read_buffer].being_transmitted = false;
+    }
+}
+
+void setup_dma_irq(void) {
+    // Clear any stale pending bit before enabling
+    dma_hw->ints0 = (1u << data_chan);
+
+    // Route THIS channel to DMA IRQ 0
+    dma_channel_set_irq0_enabled(data_chan, true);
+
+    irq_set_exclusive_handler(DMA_IRQ_0, dma_irq_handler);
+    irq_set_enabled(DMA_IRQ_0, true);
 }
 
 int initialize()
@@ -300,7 +366,7 @@ int initialize()
 
     gpio_init(TRIGGER);
     gpio_set_dir(TRIGGER, GPIO_IN);
-    gpio_set_irq_enabled_with_callback(TRIGGER, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &irq_handler);
+    gpio_set_irq_enabled_with_callback(TRIGGER, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &irq_handler); // establish trigger, set callback handler, enable flag
 
     ina226_init();
 }
@@ -309,10 +375,8 @@ int main()
 {
     initialize();
     configure_dma();
-    while (true) {        
-        ina226_read_all_data();
-        pack_all_sensor_data();
-    }
+    setup_dma_irq();
+    pack_all_sensor_data();
     return 0;
 }
 
@@ -320,7 +384,7 @@ int main()
 TODO:
 - Handle DMA completion interrupt to clear dma_busy flag
 - Configure IRQ to trigger the DMA transfer
-- Do not arbitrarily choose the sample rate, please use the maximum sample rate the INA226 can provide
+- Do not arbitrarily choose the sample rate, please use the maximum sample rate the INA226 can provide < 400kHz?
 - You can assume 500Hz for SPI requests
 - Add set_gpio_hi_z function when chip select returns high
 - You don't call your functions!! Add a protothread that samples the INA226 at max rate using the 
