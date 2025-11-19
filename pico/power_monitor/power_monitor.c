@@ -101,6 +101,8 @@ static volatile bool dma_busy = false;
 static int data_chan;
 static ina226_data_t sensor_data;
 
+bool ina226_read_all_data(void);
+
 void set_gpio_hi_z(uint pin) {
     io_bank0_hw->io[pin].ctrl = (io_bank0_hw->io[pin].ctrl & ~IO_BANK0_GPIO0_CTRL_OEOVER_BITS) | (IO_BANK0_GPIO0_CTRL_OEOVER_VALUE_DISABLE << IO_BANK0_GPIO0_CTRL_OEOVER_LSB);
 }
@@ -136,23 +138,11 @@ void pack_sample(uint8_t *buffer, int sample_index)
     sample_count++; 
 }
 
-// 
-void pack_all_sensor_data() {
-    while (True) {
-        if (sample_count >= SAMPLES_PER_TRANSMISSION) {
-            tx_buffers[write_buffer].ready_to_send = true; 
-            tx_buffers[write_buffer].being_transmitted = false;      
-
-            // Switch to new buffer if filled current write_buffer
-            write_buffer = (write_buffer + 1) % NUM_BUFFERS;     
-            sample_count = 0; 
-        }
-        ina226_read_all_data();
-        if (tx_buffers[write_buffer].ready_to_send != true) { // Do not write into a buffer that is still queued to send
-            pack_sample(tx_buffers[write_buffer].tx_data, sample_count);
-        }
-        
-    }
+void print_status(void)
+{
+    printf("I: %+7.3fA V: %6.3fV | Sample: %d/4 | WBuf: %d | RBuf: %d | DMA: %s\n", 
+           sensor_data.current_a, sensor_data.bus_voltage_v, sample_count,
+           write_buffer, read_buffer, dma_busy ? "BUSY" : "IDLE");
 }
 
 // HELPER INA226 FUNCTIONS (unchanged)
@@ -226,13 +216,6 @@ bool ina226_read_all_data(void)
     sensor_data.current_a = 0.0126408 + (signed_current * 0.001) * 1.21342;
     
     return true;
-}
-
-void print_status(void)
-{
-    printf("I: %+7.3fA V: %6.3fV | Sample: %d/4 | WBuf: %d | RBuf: %d | DMA: %s\n", 
-           sensor_data.current_a, sensor_data.bus_voltage_v, sample_count,
-           write_buffer, read_buffer, dma_busy ? "BUSY" : "IDLE");
 }
 
 // Return transmitted data
@@ -371,29 +354,35 @@ int initialize()
     ina226_init();
 }
 
+void pack_all_sensor_data() {
+    while (true) {
+        
+        // printf("hi\n");
+        // uint16_t manuf_id, die_id;
+        // ina226_read_register(INA226_REG_MANUF_ID, &manuf_id);
+        
+        if (sample_count >= SAMPLES_PER_TRANSMISSION) {
+            tx_buffers[write_buffer].ready_to_send = true; 
+            tx_buffers[write_buffer].being_transmitted = false;      
+
+            // Switch to new buffer if filled current write_buffer
+            write_buffer = (write_buffer + 1) % NUM_BUFFERS;     
+            sample_count = 0; 
+        }
+        ina226_read_all_data();
+        if (tx_buffers[write_buffer].ready_to_send != true) { // Do not write into a buffer that is still queued to send
+            pack_sample(tx_buffers[write_buffer].tx_data, sample_count);
+        }
+    }
+}
+
 int main()
 {
+    // stdio_init_all();
+    
     initialize();
     configure_dma();
     setup_dma_irq();
     pack_all_sensor_data();
     return 0;
 }
-
-/*
-TODO:
-- Handle DMA completion interrupt to clear dma_busy flag
-- Configure IRQ to trigger the DMA transfer
-- Do not arbitrarily choose the sample rate, please use the maximum sample rate the INA226 can provide < 400kHz?
-- You can assume 500Hz for SPI requests
-- Add set_gpio_hi_z function when chip select returns high
-- You don't call your functions!! Add a protothread that samples the INA226 at max rate using the 
-  ina226_read_register() function and adds it to the appropriate buffer. 
-- I don't see the purpose of the handle_transmission_request function. You only have two buffers. 
-  You have a flag that determines which buffer is actively being written to, so you know which one
-  you need to read.
-
-Overall the logic looks great guys :) just a few fixes before we can test it!
-Beyond the buffer stuff, you guys should add start/end byte(s) for each buffer. 
-Next work session we will try to integrate with ROS as well!
-*/

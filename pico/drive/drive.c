@@ -67,6 +67,16 @@ void set_gpio_hi_z(uint pin) {
     io_bank0_hw->io[pin].ctrl = (io_bank0_hw->io[pin].ctrl & ~IO_BANK0_GPIO0_CTRL_OEOVER_BITS) | (IO_BANK0_GPIO0_CTRL_OEOVER_VALUE_DISABLE << IO_BANK0_GPIO0_CTRL_OEOVER_LSB);
 }
 
+static inline float mapf(float x, float in_min, float in_max, float out_min, float out_max)
+{
+    if (in_max - in_min == 0.0f) {
+        // Avoid divide-by-zero; return output min or some safe value
+        return out_min;
+    }
+
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
 void pack_data_float(int start_index, float data)
 {
     if (start_index + 4 > LEN)
@@ -172,9 +182,12 @@ int duty_cycle_to_level(float duty_cycle)
 {
     if (duty_cycle < 0.0f)
         duty_cycle = 0.0f;
-    if (duty_cycle > 1.0f)
-        duty_cycle = 1.0f;
-    return (int)(duty_cycle * WRAPVAL + 1);
+    if (duty_cycle >= 1.0f) {
+        duty_cycle = 1.0f;        
+        return (int)(duty_cycle * WRAPVAL + 1);
+    }
+
+    return (int)(duty_cycle * WRAPVAL);
 }
 
 int adc_deadzone(int adc_value)
@@ -235,8 +248,9 @@ void initialize()
         gpio_put(brake_pins[i], 1);
 
         gpio_init(dir_pins[i]);
-        gpio_set_dir(dir_pins[i], GPIO_OUT);
-        gpio_put(dir_pins[i], 1);
+        gpio_set_dir(dir_pins[i], GPIO_OUT); 
+        // gpio_put(dir_pins[i], 1); // NORMAL OPERATING
+        gpio_put(dir_pins[i], 0); // DYNO MODE
     }
 
     for (int i = 0; i < NUM_INPUTS; i++)
@@ -275,5 +289,6 @@ int main()
         // Write float to PWM output
         pwm_set_chan_level(pwm_slices[0], PWM_CHAN_A, duty_cycle_to_level(duty));
         pwm_set_chan_level(pwm_slices[1], PWM_CHAN_A, duty_cycle_to_level(duty));
+        printf("ADC: %d\tDuty: %f\tThreshold: %d\n", adc_deadzone(adc_read()), duty, duty_cycle_to_level(duty));
     }
 }
