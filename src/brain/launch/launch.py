@@ -36,7 +36,7 @@ def generate_launch_description():
 
             # launch("teleop", "launch.py"),
             launch("serial_com", "launch.py"),
-            launch("i2c_com", "launch.py")
+            # launch("i2c_com", "launch.py")
             # launch("gpio", "launch.py")
         ]
     )
