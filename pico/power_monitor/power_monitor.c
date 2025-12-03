@@ -59,8 +59,10 @@
 #define NUM_BUFFERS 2             // Simple double buffering
 
 // Buffer configuration
+#define START_BYTES 2
+#define END_BYTES   2
 #define SAMPLE_SIZE (sizeof(float) * 2 + 4)  // timestamp + current + voltage = 12 bytes
-#define BUFFER_SIZE (SAMPLE_SIZE * SAMPLES_PER_BUFFER) // 48 bytes per buffer
+#define BUFFER_SIZE (START_BYTES + (SAMPLE_SIZE * SAMPLES_PER_BUFFER) + END_BYTES) // 52 bytes per buffer
 #define TRIGGER 17 // configure CS line to mimick an interrupt signal
 
 // INA226 collected sensor data structure
@@ -147,6 +149,15 @@ bool ina226_read_all_data(void)
 
 /** Packing a type to buffer */
 
+void pack_start_bytes(uint8_t *buffer) {
+    buffer[0] = 0xAB;
+    buffer[1] = 0xCD;
+}
+void pack_end_bytes(uint8_t *buffer) {
+    buffer[BUFFER_SIZE-2] = 0xDC;
+    buffer[BUFFER_SIZE-1] = 0xBA;
+}
+
 // Pack time data to buffer (buffer[0] is MSB)
 void pack_data_time(uint8_t *buffer, int offset)
 {
@@ -169,10 +180,12 @@ void pack_data_float(uint8_t *buffer, int offset, float data)
 // Pack ONE sample data to buffer (one sample)
 void pack_sample(uint8_t *buffer, int sample_index)
 {
-    int offset = sample_index * SAMPLE_SIZE;
+    int offset = sample_index * SAMPLE_SIZE + 2; // shift by 2 for start
+    pack_start_bytes(buffer);
     pack_data_time(buffer, offset);
     pack_data_float(buffer, offset + 4, sensor_data.current_a);
     pack_data_float(buffer, offset + 8, sensor_data.bus_voltage_v);
+    pack_end_bytes(buffer);
     print_status(write_buffer);
     printf("# Samples Packed: %d\n",sample_count);
 }

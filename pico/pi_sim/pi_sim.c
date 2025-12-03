@@ -59,9 +59,13 @@ void spi_read_data()
     printf("Received %d bytes:\n", BUFFER_SIZE);
     for (int i = 0; i < BUFFER_SIZE; i++)
     {
+        if (i == 0) printf("\nStart bytes: ");
+        if (i == BUFFER_SIZE-2) printf("\nEnd bytes: ");
+        
         printf("%02X ", rx_buffer[i]);
-        if ((i + 1) % 12 == 0)
-            printf("\n");
+        
+        if (i == 1) printf("\n"); 
+        if ((i + 3) % 12 == 0) printf("\n");
     }
     printf("\n");
 }
