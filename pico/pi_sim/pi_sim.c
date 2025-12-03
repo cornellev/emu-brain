@@ -23,7 +23,7 @@ void spi_master_init()
 {
     // initialize spi configuration
 
-    // we need to initialize the GPIO functions of the pico to 
+    // we need to initialize the GPIO functions of the pico to
     // configure for SPI hardware usage; essentially changing registers
     // and set clock frequency
     spi_init(SPI_PORT, 1000 * 1000); // 1 MHz clk
@@ -47,25 +47,33 @@ void spi_master_init()
 void spi_read_data()
 {
     gpio_put(PIN_CS, 0); // active low
-    sleep_us(5); // settle time
+    sleep_us(5);         // settle time
 
     // Write BUFFER_SIZE bytes from src (dummy_tx) to SPI (TX data register)
-    // simm. read BUFFER_SIZE bytes from SPI (RX data register) to dst (rx_buffer) 
-    // sample size of 48 bytes 
+    // simm. read BUFFER_SIZE bytes from SPI (RX data register) to dst (rx_buffer)
+    // sample size of 48 bytes
     uint8_t dummy_tx[BUFFER_SIZE] = {0};
     spi_write_read_blocking(SPI_PORT, dummy_tx, rx_buffer, BUFFER_SIZE);
     gpio_put(PIN_CS, 1); // inactive high
-    
+
     printf("Received %d bytes:\n", BUFFER_SIZE);
-    for (int i = 0; i < BUFFER_SIZE; i++)
+    uint16_t start_b = 0;
+    uint16_t end_b = 0;
+    const char* validity = NULL;
+
+    start_b = (rx_buffer[0] << 8) | rx_buffer[1];
+    end_b = (rx_buffer[BUFFER_SIZE - 2] << 8) | rx_buffer[BUFFER_SIZE - 1];
+    validity = (start_b == 0xABCD && end_b == 0xDCBA) ? "valid" : "invalid";
+
+    printf("Start bytes: %04X\n", start_b);
+    printf("End bytes:   %04X\n\n", end_b);
+    printf("The following buffer is %s:\n", validity);
+
+    for (int i = 2; i < BUFFER_SIZE-2; i++)
     {
-        if (i == 0) printf("\nStart bytes: ");
-        if (i == BUFFER_SIZE-2) printf("\nEnd bytes: ");
-        
         printf("%02X ", rx_buffer[i]);
-        
-        if (i == 1) printf("\n"); 
-        if ((i + 3) % 12 == 0) printf("\n");
+        if ((i - 1) % 12 == 0)
+            printf("\n");
     }
     printf("\n");
 }
